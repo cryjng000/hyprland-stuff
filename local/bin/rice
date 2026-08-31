@@ -1,0 +1,119 @@
+#!/usr/bin/env bash
+# rice — snapshot / restore a whole desktop configuration.
+#
+#   rice save <name> [note]   snapshot the current setup
+#   rice list                 show snapshots
+#   rice restore <name>       put a snapshot back (auto-saves current first)
+#   rice diff <name>          what differs from a snapshot
+set -euo pipefail
+
+STORE="$HOME/.local/share/rice-snapshots"
+
+# Everything that defines the look. Paths are relative to $HOME.
+PATHS=(
+    ".config/hypr"
+    ".config/waybar"
+    ".config/kitty"
+    ".config/fuzzel"
+    ".config/cava"
+    ".config/mako"
+    ".config/rofi"
+    ".config/fastfetch"
+    ".config/matugen"
+    ".config/xdg-desktop-portal"
+    ".cache/wal"
+    ".local/bin/retheme"
+    ".local/bin/cava-colors"
+    ".local/bin/screenshot"
+    ".config/island"                    # dynamic island overlay
+    ".local/bin/island"
+    ".local/lib/girepository-1.0"       # GtkLayerShell typelib, unpacked without root
+)
+
+die() { echo "$*" >&2; exit 1; }
+
+do_save() {
+    local name="${1:?usage: rice save <name> [note]}"; shift || true
+    local note="${*:-}"
+    local dest="$STORE/$name"
+    [ -e "$dest" ] && { rm -rf "$dest.prev"; mv "$dest" "$dest.prev"; }
+    mkdir -p "$dest"
+    local n=0
+    for p in "${PATHS[@]}"; do
+        [ -e "$HOME/$p" ] || continue
+        mkdir -p "$dest/$(dirname "$p")"
+        cp -a "$HOME/$p" "$dest/$(dirname "$p")/"
+        n=$((n+1))
+    done
+    {
+        echo "saved:  $(date '+%Y-%m-%d %H:%M:%S')"
+        echo "note:   $note"
+        echo "paths:  $n"
+        echo "--- packages of interest ---"
+        # "package:binary" -- some packages install a differently-named binary.
+        for pair in hyprland:Hyprland waybar:waybar kitty:kitty fuzzel:fuzzel \
+                    rofi:rofi cava:cava mako:mako grim:grim slurp:slurp \
+                    swaybg:swaybg swww:swww matugen:matugen fastfetch:fastfetch \
+                    zsh:zsh imagemagick:convert wl-clipboard:wl-copy pywal:wal; do
+            pkg="${pair%%:*}"; bin="${pair##*:}"
+            if command -v "$bin" >/dev/null 2>&1; then echo "$pkg: yes"; else echo "$pkg: no"; fi
+        done
+    } > "$dest/MANIFEST"
+    echo "saved '$name' ($n paths) -> $dest"
+}
+
+do_list() {
+    [ -d "$STORE" ] || die "no snapshots yet"
+    for d in "$STORE"/*/; do
+        [ -d "$d" ] || continue
+        local n; n=$(basename "$d")
+        case "$n" in *.prev) continue;; esac
+        printf '%-20s %s\n' "$n" "$(grep -m1 '^saved:' "$d/MANIFEST" 2>/dev/null | cut -d: -f2- | xargs)"
+        local note; note=$(grep -m1 '^note:' "$d/MANIFEST" 2>/dev/null | cut -d: -f2- | xargs)
+        [ -n "$note" ] && printf '%-20s   %s\n' "" "$note"
+    done
+}
+
+do_restore() {
+    local name="${1:?usage: rice restore <name>}"
+    local src="$STORE/$name"
+    [ -d "$src" ] || die "no snapshot named '$name' (try: rice list)"
+    do_save "auto-before-restore-$name" "automatic, taken before restoring $name"
+    # Copy into place without deleting the live directory first: rm -rf would
+    # leave a window where configs don't exist (Hyprland caches the read
+    # failure) and would break any shell cd'd into one. rsync --delete swaps
+    # contents atomically-enough and keeps the directory inode stable.
+    cd "$HOME"
+    for p in "${PATHS[@]}"; do
+        [ -e "$src/$p" ] || continue
+        mkdir -p "$HOME/$(dirname "$p")"
+        if [ -d "$src/$p" ]; then
+            rsync -a --delete "$src/$p/" "$HOME/$p/"
+        else
+            cp -a "$src/$p" "$HOME/$p"
+        fi
+    done
+    echo "restored '$name'."
+    echo "now run:  hyprctl reload  &&  pkill waybar; waybar &"
+}
+
+do_diff() {
+    local name="${1:?usage: rice diff <name>}"
+    local src="$STORE/$name"
+    [ -d "$src" ] || die "no snapshot named '$name'"
+    for p in "${PATHS[@]}"; do
+        [ -e "$HOME/$p" ] || continue
+        [ -e "$src/$p" ]  || { echo "only in current: $p"; continue; }
+        # diff exits non-zero when files differ; don't let set -e abort the loop.
+        diff -rq "$src/$p" "$HOME/$p" 2>/dev/null \
+            | sed "s|$src/|snapshot: |; s|$HOME/|current:  |" || true
+    done
+}
+
+case "${1:-}" in
+    save)    shift; do_save "$@" ;;
+    list)    do_list ;;
+    restore) shift; do_restore "$@" ;;
+    diff)    shift; do_diff "$@" ;;
+    *) die "usage: rice {save <name> [note]|list|restore <name>|diff <name>}" ;;
+esac

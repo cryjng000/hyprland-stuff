@@ -1,0 +1,229 @@
+/* Island styling. Colour names come from colors.css, which matugen rewrites
+   from the wallpaper; island.py concatenates the two before loading them.
+
+   The transport and mute buttons are NOT styled here -- they are cairo-drawn
+   (IconButton) because GTK 3.24 has no CSS transform, so hover swell, the
+   press ripple and the play/pause morph all had to be done by hand. */
+
+/* GTK's theme paints the toplevel via `.background`, whose class selector
+   outranks a bare `window` element rule -- that was the grey box around the
+   island. Match both, and kill the theme's background-image too. */
+window,
+window.background,
+window decoration {
+	background-color: transparent;
+	background-image: none;
+	box-shadow: none;
+	border: none;
+}
+
+/* ---- the pane ---------------------------------------------------------- */
+/* kitty runs at background_opacity 0.5, so the island sits near it and leans
+   on Hyprland's blur for legibility rather than on opacity. */
+
+/* NO outer box-shadow. The island fills its layer surface exactly, and GTK
+   clips a widget's shadow to that surface -- a 26px soft drop shadow came out
+   as a hard-edged grey rectangle around the whole thing. Only inset shadows
+   are safe here; they respect the border-radius. Separation from the desktop
+   comes from the Hyprland blur rule instead. */
+.island {
+	background-color: alpha(@surface_container, 0.62);
+	border: 1px solid alpha(@on_surface, 0.10);
+	border-radius: 19px;
+	box-shadow: inset 0 1px 0 alpha(@on_surface, 0.07);
+	transition: background-color 320ms cubic-bezier(0.32, 0.72, 0, 1),
+	            border-color 320ms cubic-bezier(0.32, 0.72, 0, 1),
+	            border-radius 320ms cubic-bezier(0.32, 0.72, 0, 1);
+}
+
+.island.open {
+	background-color: alpha(@surface_container, 0.72);
+	border-color: alpha(@on_surface, 0.16);
+	border-radius: 26px;
+	box-shadow: inset 0 1px 0 alpha(@on_surface, 0.11);
+}
+
+/* pinned open via Super+I -- brighter edge so the state is obvious */
+.island.pinned { border-color: alpha(@island_accent, 0.65); }
+
+/* ---- collapsed pill ---------------------------------------------------- */
+
+.pill {
+	padding: 6px 16px;
+	min-height: 20px;
+}
+
+.pill-icon {
+	font-family: "JetBrainsMono Nerd Font";
+	font-size: 15px;
+	color: @island_accent;
+	transition: color 260ms ease;
+}
+
+.pill-text {
+	font-family: "JetBrainsMono Nerd Font";
+	font-size: 12.5px;
+	font-weight: bold;
+	color: @on_surface;
+	letter-spacing: 0.2px;
+	text-shadow: 0 1px 2px alpha(@shadow, 0.6);
+	transition: color 260ms ease;
+}
+
+.island.idle   .pill-icon,
+.island.idle   .pill-text { color: @island_accent_muted; }
+.island.paused .pill-icon { color: @island_accent_dim; }
+.island.paused .pill-text { color: @island_accent_muted; }
+.island.volume .pill-icon { color: @tertiary; }
+.island.volume .pill-text { color: @tertiary; font-size: 12px; }
+
+/* ---- panel ------------------------------------------------------------- */
+
+.panel { padding: 4px 20px 18px 20px; }
+
+.track-title {
+	font-family: "JetBrainsMono Nerd Font";
+	font-size: 14.5px;
+	font-weight: bold;
+	color: @on_surface;
+	text-shadow: 0 1px 2px alpha(@shadow, 0.6);
+}
+
+.track-artist {
+	font-family: "JetBrainsMono Nerd Font";
+	font-size: 11.5px;
+	color: @island_accent_muted;
+	letter-spacing: 0.3px;
+	text-shadow: 0 1px 2px alpha(@shadow, 0.5);
+}
+
+.time {
+	font-family: "JetBrainsMono Nerd Font";
+	font-size: 9.5px;
+	color: @island_accent_dim;
+}
+
+/* ---- sliders ----------------------------------------------------------- */
+/* GTK3 draws a scale as trough > highlight + slider. The knob is invisible at
+   rest and fades in under the pointer, so the row reacts instead of sitting
+   there looking like a static bar. */
+
+scale {
+	min-height: 14px;
+	padding: 0;
+}
+
+scale trough {
+	min-height: 5px;
+	border: none;
+	border-radius: 4px;
+	background-color: alpha(@on_surface, 0.12);
+	transition: min-height 160ms ease, background-color 160ms ease;
+}
+
+scale highlight {
+	min-height: 5px;
+	border-radius: 4px;
+	background-color: @island_accent;
+	transition: min-height 160ms ease, background-color 160ms ease;
+}
+
+scale:hover trough,
+scale:hover highlight { min-height: 7px; }
+scale:hover trough    { background-color: alpha(@on_surface, 0.2); }
+scale:hover highlight { background-color: @island_accent; }
+
+scale slider {
+	min-width: 12px;
+	min-height: 12px;
+	margin: -4px;
+	border: none;
+	border-radius: 50%;
+	background-color: @island_accent_muted;
+	box-shadow: none;
+	transition: background-color 160ms ease, box-shadow 160ms ease,
+	            min-width 160ms ease, min-height 160ms ease;
+}
+
+scale:hover slider {
+	min-width: 14px;
+	min-height: 14px;
+	background-color: @island_accent_muted;
+	box-shadow: 0 1px 4px alpha(@shadow, 0.7);
+}
+
+scale:hover slider:active {
+	background-color: @island_accent;
+	box-shadow: 0 0 0 4px alpha(@island_accent, 0.25);
+}
+
+.slider-value {
+	font-family: "JetBrainsMono Nerd Font";
+	font-size: 10px;
+	color: @island_accent_dim;
+	transition: color 160ms ease;
+}
+
+.slider-row:hover .slider-value { color: @island_accent_muted; }
+
+separator {
+	background-color: alpha(@on_surface, 0.12);
+	min-height: 1px;
+}
+
+/* ---- do not disturb ---------------------------------------------------- */
+
+button.dnd {
+	font-family: "JetBrainsMono Nerd Font";
+	font-size: 11px;
+	color: @island_accent_muted;
+	background-color: alpha(@on_surface, 0.07);
+	background-image: none;
+	border: 1px solid alpha(@on_surface, 0.08);
+	box-shadow: none;
+	border-radius: 13px;
+	padding: 8px 12px;
+	min-height: 0;
+	transition: background-color 200ms ease, color 200ms ease,
+	            border-color 200ms ease, box-shadow 200ms ease;
+}
+
+button.dnd:hover {
+	background-color: alpha(@island_accent, 0.14);
+	border-color: alpha(@island_accent, 0.28);
+	color: @on_surface;
+}
+
+button.dnd:active {
+	background-color: alpha(@on_surface, 0.22);
+	box-shadow: inset 0 2px 5px alpha(@shadow, 0.5);
+}
+
+button.dnd.active {
+	color: @background;
+	background-color: @island_accent;
+	border-color: alpha(@island_accent, 0.6);
+}
+
+button.dnd.active:hover {
+	box-shadow: 0 0 0 3px alpha(@island_accent, 0.25);
+}
+
+/* Cairo-drawn widgets (artwork, spectrum, transport and mute buttons) own
+   their whole surface. Without this the theme paints a background into their
+   GdkWindow, which shows up as a box behind the circles. */
+.cairo-widget {
+	background-color: transparent;
+	background-image: none;
+	border: none;
+	box-shadow: none;
+}
+
+/* expanded, the header is a quiet album caption rather than a repeat of the
+   title shown directly beneath it */
+.island.open .pill-text {
+	font-size: 11px;
+	font-weight: normal;
+	color: @island_accent_dim;
+	letter-spacing: 0.6px;
+}

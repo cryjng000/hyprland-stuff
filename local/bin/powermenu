@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+# Minimal rofi power menu -- stands in for wlogout, which isn't packaged here.
+set -euo pipefail
+choice=$(printf 'Lock\nLogout\nReboot\nShutdown\n' | rofi -dmenu -p "power" -i) || exit 0
+case "$choice" in
+    Lock)     command -v swaylock >/dev/null && swaylock -f || notify-send "No lock screen installed" ;;
+    Logout)   hyprctl dispatch exit ;;
+    Reboot)   systemctl reboot ;;
+    Shutdown) systemctl poweroff ;;
+esac

@@ -1,0 +1,23 @@
+{
+  "port": 8787,
+  "framerate": 60,
+  "idle_framerate": 15,
+  "ui_window_class": "spotify",
+  "pause_on_fullscreen": true,
+  "beat_sensitivity": 1.45,
+  "beat_floor": 0.035,
+  "min_beat_interval": 0.16,
+  "beat_decay": 0.86,
+  "album_art_accent": true,
+  "matugen_scheme": "scheme-vibrant",
+  "matugen_prefer": "saturation",
+  "min_art_saturation": 0.12,
+  "mode": "dark",
+  "hyprland_borders": false,
+  "hyprland_max_hz": 6,
+  "border_angle": 45,
+  "player": "spotify",
+  "audio_source": "spotify",
+  "tap_node": "spotify",
+  "tap_name": "beatsync_tap"
+}

@@ -1,0 +1,18 @@
+#!/usr/bin/env bash
+# Control wrapper for the dynamic island daemon.
+set -u
+PY="$HOME/.config/island/island.py"
+PAT='island[/]island.py'   # bracket keeps pkill -f from matching this script's own cmdline
+
+case "${1:-start}" in
+	start)
+		pkill -f "$PAT" 2>/dev/null; sleep 0.2
+		exec python3 "$PY"
+		;;
+	stop)    pkill -f "$PAT" ;;
+	restart) pkill -f "$PAT" 2>/dev/null; sleep 0.3; setsid python3 "$PY" >/dev/null 2>&1 & ;;
+	reload)  pkill -USR1 -f "$PAT" ;;   # re-read colors.css + style.css in place
+	toggle)  pkill -USR2 -f "$PAT" ;;   # pin/unpin the panel open
+	status)  pgrep -af "$PAT" || echo "island: not running" ;;
+	*)       echo "usage: island {start|toggle|stop|restart|reload|status}" >&2; exit 1 ;;
+esac

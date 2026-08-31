@@ -1,0 +1,24 @@
+# --- matugen output -------------------------------------------------------
+# Every one of these is generated from config/matugen/templates by `retheme`.
+# The templates are the source of truth; the rendered files are not tracked so
+# the repo does not churn on every wallpaper change.
+config/hypr/colors.conf
+config/waybar/colors.css
+config/island/colors.css
+config/kitty/colors.conf
+config/rofi/colors.rasi
+config/beatsync/palette.json
+config/gtk-3.0/colors.css
+config/gtk-4.0/colors.css
+
+# --- runtime state --------------------------------------------------------
+config/hypr/current_wallpaper
+**/__pycache__/
+*.pyc
+
+# --- editing debris -------------------------------------------------------
+*.bak
+*.bak-*
+*.bak[0-9]*
+*~
+*.swp

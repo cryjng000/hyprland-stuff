@@ -1,0 +1,65 @@
+[config]
+# wppicker.sh paints the wallpaper with swaybg (swww isn't packaged for
+# Ubuntu), so there is deliberately no [config.wallpaper] section here --
+# matugen 4.x demands a `command` field whenever that section exists.
+
+[templates.waybar]
+input_path  = '~/.config/matugen/templates/colors.css'
+output_path = '~/.config/waybar/colors.css'
+post_hook   = 'pkill -SIGUSR2 waybar'
+
+[templates.kitty]
+input_path  = '~/.config/matugen/templates/kitty-colors.conf'
+output_path = '~/.config/kitty/colors.conf'
+# dash's builtin kill rejects -SIGUSR1; use the -USR1 spelling.
+post_hook   = "pidof kitty >/dev/null 2>&1 && kill -USR1 $(pidof kitty) || true"
+
+[templates.hyprland]
+input_path  = '~/.config/matugen/templates/hyprland-colors.conf'
+output_path = '~/.config/hypr/colors.conf'
+post_hook   = 'hyprctl reload'
+
+[templates.rofi]
+input_path  = '~/.config/matugen/templates/rofi-colors.rasi'
+output_path = '~/.config/rofi/colors.rasi'
+
+[templates.cava]
+input_path  = '~/.config/matugen/templates/matugen-cava'
+output_path = '~/.config/cava/config'
+post_hook   = "pkill -USR1 cava || true"
+
+[templates.gtk3]
+input_path  = '~/.config/matugen/templates/gtk-colors.css'
+output_path = '~/.config/gtk-3.0/colors.css'
+
+[templates.gtk4]
+input_path  = '~/.config/matugen/templates/gtk-colors.css'
+output_path = '~/.config/gtk-4.0/colors.css'
+
+# beatd reads this to keep Spotify + window borders on the wallpaper palette.
+# No post_hook: the daemon polls the file's mtime.
+[templates.beatsync]
+input_path  = '~/.config/matugen/templates/beatsync-palette.json'
+output_path = '~/.config/beatsync/palette.json'
+
+# The dynamic island reads this and reloads it on SIGUSR1, so it re-skins with
+# the wallpaper like everything else. Same template as waybar -- it only needs
+# the @define-color block.
+[templates.island]
+input_path  = '~/.config/matugen/templates/colors.css'
+output_path = '~/.config/island/colors.css'
+post_hook   = "pkill -USR1 -f 'island[/]island.py' || true"
+
+# Notifications. makoctl reload re-reads the config in place -- do NOT signal
+# mako here; a pkill pattern containing this file's own path would kill the
+# hook's own sh -c.
+[templates.mako]
+input_path  = '~/.config/matugen/templates/mako-config'
+output_path = '~/.config/mako/config'
+post_hook   = 'makoctl reload || true'
+
+# Fallback launcher (rofi is on the keybind). No post_hook: fuzzel reads its
+# ini fresh at every launch.
+[templates.fuzzel]
+input_path  = '~/.config/matugen/templates/fuzzel.ini'
+output_path = '~/.config/fuzzel/fuzzel.ini'

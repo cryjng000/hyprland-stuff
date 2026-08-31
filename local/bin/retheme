@@ -1,0 +1,60 @@
+#!/usr/bin/env bash
+# Re-theme the desktop from a wallpaper (image or video) using matugen.
+#
+#   retheme                      random wallpaper from ~/.config/wallpapers
+#   retheme path/to/file         a specific image or video
+#   PREFER=darkness retheme ...  override matugen's source-colour choice
+#   MODE=light retheme ...       light palette
+set -euo pipefail
+
+# Hyprland spawns processes without ~/.local/bin on PATH, where matugen lives.
+PATH="$HOME/.local/bin:$PATH"
+
+WALLDIR="$HOME/.config/wallpapers"
+# matugen needs a preference when an image yields several candidate colours
+# and there's no TTY to prompt on (i.e. any time this runs from a keybind).
+PREFER="${PREFER:-saturation}"
+MODE="${MODE:-dark}"
+
+if [ $# -ge 1 ]; then
+    WP="$1"
+else
+    WP=$(find "$WALLDIR" -maxdepth 1 -type f \
+         \( -iname '*.jpg' -o -iname '*.jpeg' -o -iname '*.png' \
+            -o -iname '*.mp4' -o -iname '*.webm' -o -iname '*.mkv' \) | shuf -n1)
+fi
+[ -f "$WP" ] || { echo "no such wallpaper: $WP" >&2; exit 1; }
+
+# matugen reads images, not video -- pull a representative frame first.
+SRC="$WP"
+case "${WP,,}" in
+    *.mp4|*.webm|*.mkv|*.mov|*.avi|*.gif)
+        command -v ffmpeg >/dev/null 2>&1 || { echo "ffmpeg needed for video wallpapers" >&2; exit 1; }
+        SRC="$HOME/.cache/wallpaper-frame.png"
+        # Seek to the midpoint: opening frames are often black or a title card.
+        dur=$(ffprobe -v error -show_entries format=duration -of csv=p=0 "$WP" 2>/dev/null || echo 0)
+        mid=$(awk -v d="${dur:-0}" 'BEGIN{ printf "%.2f", (d>2 ? d/2 : 0) }')
+        ffmpeg -y -ss "$mid" -i "$WP" -frames:v 1 "$SRC" >/dev/null 2>&1 \
+            || ffmpeg -y -i "$WP" -frames:v 1 "$SRC" >/dev/null 2>&1
+        [ -f "$SRC" ] || { echo "could not extract a frame from $WP" >&2; exit 1; }
+        ;;
+esac
+
+echo "wallpaper: $(basename "$WP")   mode: $MODE   prefer: $PREFER"
+matugen image "$SRC" --mode "$MODE" --prefer "$PREFER"
+
+# Remember the choice so autostart can repaint it next login.
+mkdir -p "$HOME/.cache"
+printf '%s\n' "$WP" > "$HOME/.cache/current_wallpaper"
+ln -sf "$WP" "$HOME/.config/hypr/current_wallpaper"
+
+set-wallpaper "$WP"
+
+# matugen's post_hooks reload kitty/cava/hyprland, but a cold restart of waybar
+# is more reliable than SIGUSR2 when the CSS structure itself changed.
+if command -v waybar >/dev/null 2>&1; then
+    pkill waybar 2>/dev/null || true
+    setsid waybar >/dev/null 2>&1 </dev/null &
+fi
+
+echo "done — kitty colours apply to newly opened windows."

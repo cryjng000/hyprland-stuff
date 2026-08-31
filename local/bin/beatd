@@ -1,0 +1,1086 @@
+#!/usr/bin/env python3
+"""
+beatd -- audio-reactive beat + colour broadcaster.
+
+Listens to Spotify's own audio stream (via cava's FFT), detects beats, and
+broadcasts a 60 fps stream of {bass, mid, treble, beat, spectrum} plus the
+current colour palette over a localhost WebSocket.
+
+With "audio_source": "desktop" in the config it listens to the default sink
+monitor instead, i.e. to every application at once (the old behaviour).
+
+Consumers:
+  * the Spicetify `beatsync` extension  (Spotify UI reacts)
+  * `beatctl waybar`                    (waybar module reacts)
+  * Hyprland window borders             (driven directly from here)
+
+Palette = wallpaper base (written by matugen into ~/.config/beatsync/palette.json)
+          + per-track accent extracted from Spotify's album art.
+"""
+from __future__ import annotations
+
+import argparse
+import asyncio
+import hashlib
+import json
+import math
+import os
+import shutil
+import signal
+import socket
+import statistics
+import subprocess
+import sys
+import threading
+import time
+from collections import deque
+from pathlib import Path
+
+try:
+    import websockets
+except ImportError:
+    sys.exit("beatd: python3 'websockets' module missing (pip install --user websockets)")
+
+HOME = Path.home()
+CFG_DIR = HOME / ".config" / "beatsync"
+CACHE_DIR = HOME / ".cache" / "beatsync"
+ART_DIR = CACHE_DIR / "art"
+CONFIG_F = CFG_DIR / "config.json"
+PALETTE_F = CFG_DIR / "palette.json"
+
+DEFAULTS = {
+    "port": 8787,
+    "bars": 24,
+    "framerate": 60,
+    "idle_framerate": 15,
+    "ui_window_class": "spotify",
+    # Which audio to analyse. "spotify" taps that one playback stream, so
+    # nothing else on the desktop (browser, Discord, games) moves the bars.
+    # "desktop" is the old behaviour: the default sink monitor, everything.
+    "audio_source": "spotify",
+    "tap_node": "spotify",      # PipeWire node.name of the stream to tap
+    "tap_name": "beatsync_tap", # name of the virtual source we publish
+    "pause_on_fullscreen": True,
+    "bass_bars": 4,
+    "mid_bars": 10,
+    # Onset detection. Raise sensitivity for fewer/stronger beats.
+    "beat_sensitivity": 1.45,
+    "beat_floor": 0.035,
+    "min_beat_interval": 0.16,
+    "beat_decay": 0.86,
+    # Per-track accent colour from album art.
+    "album_art_accent": True,
+    "matugen_scheme": "scheme-vibrant",
+    "matugen_prefer": "saturation",
+    "min_art_saturation": 0.12,
+    "mode": "dark",
+    # Hyprland border pulsing. Off by default: there is no targeted IPC for
+    # border colour on this Hyprland (no `setprop`), so every update goes
+    # through `eval hl.config(...)`, which re-evaluates the whole config and
+    # damages the full screen. With blur (size 8 / passes 3 / xray) that
+    # re-blurs everything -- measured at roughly +0.4 GPU points per Hz, i.e.
+    # an idle desktop going from 2% to ~10%. Enable it if you want it.
+    "hyprland_borders": False,
+    "hyprland_max_hz": 6,
+    "border_angle": 45,
+    "player": "spotify",
+}
+
+
+def load_config() -> dict:
+    cfg = dict(DEFAULTS)
+    if CONFIG_F.exists():
+        try:
+            cfg.update(json.loads(CONFIG_F.read_text()))
+        except Exception as exc:  # a broken config must not take the daemon down
+            log(f"config unreadable ({exc}); using defaults")
+    return cfg
+
+
+def log(msg: str) -> None:
+    print(f"[beatd] {msg}", file=sys.stderr, flush=True)
+
+
+# --------------------------------------------------------------------------
+# colour helpers
+# --------------------------------------------------------------------------
+
+def hex_to_rgb(h: str) -> tuple[int, int, int]:
+    h = h.lstrip("#")
+    if len(h) == 3:
+        h = "".join(c * 2 for c in h)
+    return int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
+
+
+def rgb_to_hex(r: float, g: float, b: float) -> str:
+    clamp = lambda v: max(0, min(255, int(round(v))))
+    return f"#{clamp(r):02x}{clamp(g):02x}{clamp(b):02x}"
+
+
+def scale(hex_colour: str, factor: float) -> str:
+    """Multiply brightness, letting values ride up towards white above 1.0."""
+    r, g, b = hex_to_rgb(hex_colour)
+    if factor <= 1.0:
+        return rgb_to_hex(r * factor, g * factor, b * factor)
+    t = min(1.0, factor - 1.0)
+    return rgb_to_hex(r + (255 - r) * t, g + (255 - g) * t, b + (255 - b) * t)
+
+
+def rgba_hypr(hex_colour: str, alpha: int = 0xEE) -> str:
+    r, g, b = hex_to_rgb(hex_colour)
+    return f"rgba({r:02x}{g:02x}{b:02x}{alpha:02x})"
+
+
+# --------------------------------------------------------------------------
+# Hyprland IPC
+# --------------------------------------------------------------------------
+
+class Hypr:
+    """Drives window border colours over Hyprland's IPC socket.
+
+    Hyprland has two config parsers. The Lua one (hyprland.lua) rejects
+    `keyword` outright -- "keyword can't work with non-legacy parsers, use
+    eval" -- so we probe once and speak whichever dialect this session uses.
+    """
+
+    def __init__(self, borders: bool):
+        sig = os.environ.get("HYPRLAND_INSTANCE_SIGNATURE", "")
+        rt = os.environ.get("XDG_RUNTIME_DIR", f"/run/user/{os.getuid()}")
+        self.path = f"{rt}/hypr/{sig}/.socket.sock" if sig else ""
+        # The socket is used for two independent things: driving borders
+        # (optional, off by default) and asking which workspace is on screen
+        # (always wanted). Keep those flags apart.
+        self.available = bool(sig) and os.path.exists(self.path)
+        self.enabled = borders and self.available
+        self.dialect: str | None = None
+        if borders and not self.enabled:
+            log("Hyprland socket not found; border pulsing disabled")
+
+    def _talk(self, cmd: str, limit: int) -> str:
+        if not self.available:
+            return ""
+        try:
+            with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as s:
+                s.settimeout(0.35)
+                s.connect(self.path)
+                s.sendall(cmd.encode())
+                chunks = []
+                total = 0
+                while total < limit:
+                    buf = s.recv(65536)
+                    if not buf:
+                        break
+                    chunks.append(buf)
+                    total += len(buf)
+                return b"".join(chunks).decode(errors="replace")
+        except Exception:
+            return ""  # a dropped border frame is not worth a log line
+
+    def send(self, cmd: str) -> str:
+        if not self.enabled:
+            return ""
+        return self._talk(cmd, 512)
+
+    def query(self, cmd: str):
+        """Run a `j/...` query and return the parsed JSON, or None."""
+        raw = self._talk(cmd, 4 << 20)
+        if not raw:
+            return None
+        try:
+            return json.loads(raw)
+        except Exception:
+            return None
+
+    @staticmethod
+    def _lua_cmd(c1: str, c2: str, angle: int) -> str:
+        return (
+            "eval hl.config({ general = { col = { active_border = "
+            f'{{ colors = {{"{c1}","{c2}"}}, angle = {angle} }} }} }} }})'
+        )
+
+    @staticmethod
+    def _legacy_cmd(c1: str, c2: str, angle: int) -> str:
+        return f"keyword general:col.active_border {c1} {c2} {angle}deg"
+
+    def borders(self, c1: str, c2: str, angle: int) -> None:
+        if not self.enabled:
+            return
+        a, b = rgba_hypr(c1), rgba_hypr(c2)
+        if self.dialect is None:
+            reply = self.send(self._lua_cmd(a, b, angle))
+            if reply.strip() == "ok":
+                self.dialect = "lua"
+                log("Hyprland: Lua config parser")
+                return
+            reply = self.send(self._legacy_cmd(a, b, angle))
+            if reply.strip() == "ok":
+                self.dialect = "legacy"
+                log("Hyprland: legacy config parser")
+                return
+            log(f"Hyprland rejected both border dialects ({reply.strip()!r}); "
+                "border pulsing disabled")
+            self.enabled = False
+            return
+        cmd = self._lua_cmd if self.dialect == "lua" else self._legacy_cmd
+        self.send(cmd(a, b, angle))
+
+    def restore(self) -> None:
+        # Re-reading the config is the only reliable way back to the colours
+        # hyprland.lua / matugen actually declared.
+        self.send("reload")
+
+
+# --------------------------------------------------------------------------
+# audio source: tap one application instead of the whole desktop
+# --------------------------------------------------------------------------
+
+class SourceTap(threading.Thread):
+    """Publishes a PipeWire source carrying *only* Spotify's playback.
+
+    cava here is built against libpulse alone -- `ldd $(which cava)` shows no
+    libpipewire -- so it cannot be pointed at a playback stream directly; it
+    can only open a named pulse source. So we publish one: pw-loopback makes a
+    virtual Audio/Source whose capture side is linked to Spotify's output
+    ports.
+
+    Those links are *additional*. Spotify keeps its existing link to the real
+    sink, so playback, routing and volume are all untouched -- this is a copy
+    of the stream, not a detour through a null sink. (Vencord's screen-share
+    node already taps Spotify exactly this way.)
+
+    node.passive keeps the tap from driving the graph on its own, so it never
+    holds the audio device awake when Spotify is idle.
+
+    Spotify's node disappears when the client quits, so a watcher re-links
+    whenever it comes back.
+
+    The capture side is deliberately node.autoconnect=false and does all its
+    linking by hand. Pinning it with target.object instead looked simpler, but
+    that only binds at stream creation: if Spotify happens to be closed when
+    pw-loopback starts, the capture stream falls back to autoconnecting to the
+    DEFAULT SOURCE -- the microphone. Refusing to autoconnect at all makes that
+    failure impossible; the worst case is silence until the watcher links up.
+    """
+
+    def __init__(self, cfg: dict):
+        super().__init__(name="source-tap", daemon=True)
+        self.node = cfg["tap_node"]
+        self.source = cfg["tap_name"]
+        self.capture = f"{cfg['tap_name']}_capture"
+        self.proc: subprocess.Popen | None = None
+        self.stop_flag = threading.Event()
+        self._warned = False
+
+    # -- lifecycle --------------------------------------------------------
+    def _spawn(self) -> bool:
+        if shutil.which("pw-loopback") is None:
+            log("pw-loopback not on PATH -- cannot tap a single application")
+            return False
+        try:
+            self.proc = subprocess.Popen(
+                [
+                    "pw-loopback", "-m", "[FL FR]",
+                    "--capture-props="
+                    f"{{ node.name={self.capture} node.passive=true "
+                    "node.autoconnect=false }}",
+                    "--playback-props="
+                    f"{{ media.class=Audio/Source node.name={self.source} "
+                    f'node.description="Beatsync tap ({self.node})" }}',
+                ],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+        except OSError as exc:
+            log(f"pw-loopback failed to start ({exc})")
+            return False
+        return True
+
+    def run(self) -> None:
+        if not self._spawn():
+            return
+        while not self.stop_flag.wait(2.0):
+            if self.proc is not None and self.proc.poll() is not None:
+                log("pw-loopback exited; restarting")
+                if not self._spawn():
+                    return
+                continue
+            try:
+                self._ensure_links()
+            except Exception as exc:  # a broken tap must not kill the daemon
+                if not self._warned:
+                    log(f"tap re-link failed ({exc})")
+                    self._warned = True
+
+    def stop(self) -> None:
+        self.stop_flag.set()
+        if self.proc is not None and self.proc.poll() is None:
+            self.proc.terminate()
+            try:
+                self.proc.wait(timeout=2)
+            except subprocess.TimeoutExpired:
+                self.proc.kill()
+
+    # -- linking ----------------------------------------------------------
+    @staticmethod
+    def _links() -> dict[str, set[str]]:
+        """Output port -> set of ports it feeds, parsed from `pw-link -l`."""
+        try:
+            out = subprocess.run(
+                ["pw-link", "-l"], capture_output=True, text=True, timeout=3
+            ).stdout
+        except (OSError, subprocess.SubprocessError):
+            return {}
+        links: dict[str, set[str]] = {}
+        cur = None
+        for line in out.splitlines():
+            if not line[:1].isspace():
+                cur = line.strip()
+                links.setdefault(cur, set())
+            elif cur is not None and "|->" in line:
+                links[cur].add(line.split("|->", 1)[1].strip())
+        return links
+
+    def _ensure_links(self) -> None:
+        prefix = f"{self.node}:output_"
+        for port, dests in self._links().items():
+            if not port.startswith(prefix):
+                continue
+            chan = port.rsplit("_", 1)[-1]
+            # A mono stream feeds both sides so it does not read as hard-left.
+            targets = ("FL", "FR") if chan == "MONO" else (chan,)
+            for t in targets:
+                dest = f"{self.capture}:input_{t}"
+                if dest not in dests:
+                    subprocess.run(
+                        ["pw-link", port, dest], capture_output=True, timeout=3
+                    )
+
+    def wait_ready(self, timeout: float = 5.0) -> bool:
+        """Block until the virtual source is visible to pulse (and so to cava)."""
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            try:
+                out = subprocess.run(
+                    ["pactl", "list", "short", "sources"],
+                    capture_output=True, text=True, timeout=3,
+                ).stdout
+            except (OSError, subprocess.SubprocessError):
+                return False
+            if any(f.strip() == self.source
+                   for line in out.splitlines()
+                   for f in line.split("\t")[1:2]):
+                return True
+            time.sleep(0.2)
+        return False
+
+
+# --------------------------------------------------------------------------
+# audio: cava as an FFT front-end
+# --------------------------------------------------------------------------
+
+class Analyser(threading.Thread):
+    """Runs cava in raw mode and turns its bars into band levels + onsets."""
+
+    def __init__(self, cfg: dict):
+        super().__init__(name="analyser", daemon=True)
+        self.cfg = cfg
+        self.nbars = int(cfg["bars"])
+        self.nbass = int(cfg["bass_bars"])
+        # Overwritten by Server.serve_until once the tap is confirmed up;
+        # "auto" is pulse's default sink monitor, i.e. the whole desktop.
+        self.source = "auto"
+        self.nmid = int(cfg["mid_bars"])
+        self.proc: subprocess.Popen | None = None
+        self.stop_flag = threading.Event()
+
+        # published state (plain assignment; the GIL makes this safe enough)
+        self.spectrum = [0.0] * self.nbars
+        self.bass = self.mid = self.treb = 0.0
+        self.beat_env = 0.0
+        self.bpm = 0.0
+        self.beat_count = 0
+        self.alive = False
+
+        self._prev = [0.0] * self.nbars
+        self._flux_hist: deque[float] = deque(maxlen=int(cfg["framerate"]) * 2)
+        self._last_beat = 0.0
+        self._intervals: deque[float] = deque(maxlen=8)
+
+    # -- cava plumbing ----------------------------------------------------
+    def _write_cava_config(self) -> Path:
+        path = CACHE_DIR / "cava.conf"
+        path.write_text(
+            "[general]\n"
+            f"framerate = {self.cfg['framerate']}\n"
+            f"bars = {self.nbars}\n"
+            "autosens = 1\n"
+            "overshoot = 0\n"
+            "\n[input]\n"
+            "method = pulse\n"
+            f"source = {self.source}\n"
+            "\n[output]\n"
+            "method = raw\n"
+            "raw_target = /dev/stdout\n"
+            "data_format = ascii\n"
+            "ascii_max_range = 1000\n"
+            "\n[smoothing]\n"
+            "noise_reduction = 22\n"
+        )
+        return path
+
+    def run(self) -> None:
+        conf = self._write_cava_config()
+        while not self.stop_flag.is_set():
+            try:
+                self.proc = subprocess.Popen(
+                    ["cava", "-p", str(conf)],
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.DEVNULL,
+                    text=True,
+                    bufsize=1,
+                )
+            except FileNotFoundError:
+                log("cava not found on PATH -- no audio analysis")
+                return
+            self.alive = True
+            assert self.proc.stdout is not None
+            for line in self.proc.stdout:
+                if self.stop_flag.is_set():
+                    break
+                self._consume(line)
+            self.alive = False
+            if self.stop_flag.is_set():
+                break
+            log("cava exited; restarting in 2s")
+            time.sleep(2)
+
+    def stop(self) -> None:
+        self.stop_flag.set()
+        if self.proc and self.proc.poll() is None:
+            self.proc.terminate()
+
+    # -- analysis ---------------------------------------------------------
+    def _consume(self, line: str) -> None:
+        parts = line.strip().rstrip(";").split(";")
+        if len(parts) < self.nbars:
+            return
+        try:
+            bars = [min(1.0, int(p) / 1000.0) for p in parts[: self.nbars]]
+        except ValueError:
+            return
+
+        self.spectrum = bars
+        b_end = self.nbass
+        m_end = self.nbass + self.nmid
+        self.bass = sum(bars[:b_end]) / max(1, b_end)
+        self.mid = sum(bars[b_end:m_end]) / max(1, m_end - b_end)
+        self.treb = sum(bars[m_end:]) / max(1, self.nbars - m_end)
+
+        # Spectral flux over the low half: rising energy, not absolute energy,
+        # is what a kick actually looks like.
+        flux = sum(max(0.0, bars[i] - self._prev[i]) for i in range(m_end)) / m_end
+        self._prev = bars
+        self._flux_hist.append(flux)
+
+        now = time.monotonic()
+        self.beat_env *= self.cfg["beat_decay"]
+        if self.beat_env < 0.001:
+            self.beat_env = 0.0
+
+        if len(self._flux_hist) >= 20:
+            mean = statistics.fmean(self._flux_hist)
+            thresh = mean * self.cfg["beat_sensitivity"] + 0.004
+            hot = flux > thresh and self.bass > self.cfg["beat_floor"]
+            if hot and (now - self._last_beat) >= self.cfg["min_beat_interval"]:
+                if self._last_beat:
+                    gap = now - self._last_beat
+                    if 0.25 <= gap <= 2.0:
+                        self._intervals.append(gap)
+                self._last_beat = now
+                self.beat_env = 1.0
+                self.beat_count += 1
+                if len(self._intervals) >= 4:
+                    self.bpm = round(60.0 / statistics.median(self._intervals), 1)
+
+    def snapshot(self) -> dict:
+        return {
+            "t": "f",
+            "bass": round(self.bass, 4),
+            "mid": round(self.mid, 4),
+            "treb": round(self.treb, 4),
+            "beat": round(self.beat_env, 4),
+            "bpm": self.bpm,
+            "n": self.beat_count,
+            "spec": [round(v, 3) for v in self.spectrum],
+        }
+
+
+# --------------------------------------------------------------------------
+# palette: wallpaper base + album-art accent
+# --------------------------------------------------------------------------
+
+# Which matugen roles we actually ship to consumers.
+BASE_ROLES = [
+    "background", "on_background", "surface", "surface_container",
+    "surface_container_high", "surface_container_highest", "surface_variant",
+    "on_surface", "on_surface_variant", "primary", "on_primary",
+    "primary_container", "on_primary_container", "secondary", "tertiary",
+    "outline", "outline_variant", "error",
+]
+ACCENT_ROLES = [
+    "primary", "on_primary", "primary_container", "secondary", "tertiary",
+    "surface", "surface_container", "on_surface", "source_color",
+]
+
+FALLBACK_BASE = {
+    "background": "#101418", "on_background": "#e0e2e8",
+    "surface": "#101418", "surface_container": "#1d2024",
+    "surface_container_high": "#272a2f", "surface_container_highest": "#32353a",
+    "surface_variant": "#41474d", "on_surface": "#e0e2e8",
+    "on_surface_variant": "#c2c7ce", "primary": "#a0cafd", "on_primary": "#003351",
+    "primary_container": "#1e4975", "on_primary_container": "#cce5ff",
+    "secondary": "#bbc7db", "tertiary": "#d6bee4", "outline": "#8b9198",
+    "outline_variant": "#41474d", "error": "#ffb4ab",
+}
+
+
+def _matugen_json(args: list[str], cfg: dict, roles: list[str]) -> dict | None:
+    """Run matugen, return just the roles we ship to consumers."""
+    matugen = shutil.which("matugen") or str(HOME / ".local/bin/matugen")
+    if not os.path.exists(matugen):
+        return None
+    cmd = [matugen] + args + [
+        "--mode", cfg["mode"],
+        "--type", cfg["matugen_scheme"],
+        "--json", "hex", "--dry-run", "-q",
+    ]
+    try:
+        out = subprocess.run(cmd, capture_output=True, text=True, timeout=20)
+        if out.returncode != 0:
+            return None
+        colours = json.loads(out.stdout).get("colors", {})
+    except Exception as exc:
+        log(f"matugen failed: {exc}")
+        return None
+
+    result = {}
+    for role in roles:
+        node = colours.get(role)
+        if isinstance(node, dict):
+            val = (node.get("default", {}).get("color")
+                   or node.get(cfg["mode"], {}).get("color"))
+            if val:
+                result[role] = val
+        elif isinstance(node, str):
+            result[role] = node
+    return result or None
+
+
+def dominant_colour(path: Path) -> tuple[str, float] | None:
+    """Pick the colour an album cover actually reads as, plus its saturation.
+
+    `matugen image` quietly returns its fallback blue on covers it can't read
+    a source colour from (grayscale art, very low-contrast art), which would
+    paint every such track the same wrong colour. Doing the extraction here
+    means we always know whether we found real colour or not.
+    """
+    try:
+        from PIL import Image
+    except ImportError:
+        return None
+    try:
+        im = Image.open(path)
+        im.draft("RGB", (200, 200))  # cheap JPEG downscale during decode
+        im = im.convert("RGB")
+        im.thumbnail((200, 200))
+        quant = im.quantize(colors=16, method=Image.Quantize.MEDIANCUT)
+        palette = quant.getpalette() or []
+        counts = quant.getcolors(maxcolors=256) or []
+    except Exception as exc:
+        log(f"art read failed for {path.name}: {exc}")
+        return None
+    if not counts or not palette:
+        return None
+
+    total = sum(c for c, _ in counts) or 1
+
+    def rank(skip_extremes: bool) -> list:
+        out = []
+        for count, idx in counts:
+            r, g, b = palette[idx * 3: idx * 3 + 3]
+            hi, lo = max(r, g, b), min(r, g, b)
+            value = hi / 255.0
+            sat = 0.0 if hi == 0 else (hi - lo) / hi
+            if skip_extremes and not (0.10 <= value <= 0.96):
+                continue  # letterboxing and blown highlights aren't the subject
+            # Area matters, but sub-linearly: a big dark background must not
+            # outvote the cover's actual colour. Mid-brightness is favoured
+            # because that is where a colour still reads as a colour.
+            share = (count / total) ** 0.45
+            bell = math.exp(-((value - 0.58) ** 2) / (2 * 0.26 ** 2))
+            out.append((share * (0.12 + sat ** 0.7 * 1.9) * bell, r, g, b, sat))
+        return out
+
+    ranked = rank(True) or rank(False)
+    if not ranked:
+        return None
+    ranked.sort(key=lambda t: -t[0])
+    _, r, g, b, sat = ranked[0]
+    return rgb_to_hex(r, g, b), sat
+
+
+class Palette:
+    """Holds the wallpaper base palette and the current album-art accent."""
+
+    def __init__(self, cfg: dict):
+        self.cfg = cfg
+        self.base = dict(FALLBACK_BASE)
+        self.accent: dict = {}
+        self.track: dict = {}
+        self.version = 0
+        self._palette_mtime = 0.0
+        self.reload_base()
+
+    def reload_base(self) -> bool:
+        """Pick up the file matugen writes whenever the wallpaper changes."""
+        try:
+            mtime = PALETTE_F.stat().st_mtime
+        except FileNotFoundError:
+            return False
+        if mtime == self._palette_mtime:
+            return False
+        try:
+            data = json.loads(PALETTE_F.read_text())
+        except Exception as exc:
+            log(f"palette.json unreadable: {exc}")
+            return False
+        self._palette_mtime = mtime
+        merged = dict(FALLBACK_BASE)
+        merged.update({k: v for k, v in data.items() if isinstance(v, str) and v.startswith("#")})
+        self.base = merged
+        self.version += 1
+        log("wallpaper palette reloaded")
+        return True
+
+    def set_accent(self, accent: dict | None, track: dict) -> None:
+        self.accent = accent or {}
+        self.track = track
+        self.version += 1
+
+    def effective(self) -> dict:
+        """Accent wins where it has an opinion; wallpaper supplies the rest."""
+        acc = self.accent if self.cfg["album_art_accent"] and self.accent else {}
+        return {
+            "primary": acc.get("primary", self.base["primary"]),
+            "secondary": acc.get("secondary", self.base["secondary"]),
+            "tertiary": acc.get("tertiary", self.base["tertiary"]),
+            "on_primary": acc.get("on_primary", self.base["on_primary"]),
+            "container": acc.get("primary_container", self.base["primary_container"]),
+        }
+
+    def message(self) -> dict:
+        return {
+            "t": "palette",
+            "v": self.version,
+            "base": self.base,
+            "accent": self.effective(),
+            "art_accent": bool(self.accent),
+            "track": self.track,
+        }
+
+
+class TrackWatcher:
+    """Polls MPRIS, fetches album art, derives the per-track accent."""
+
+    FMT = "{{mpris:trackid}}\x1f{{mpris:artUrl}}\x1f{{xesam:title}}\x1f{{xesam:artist}}\x1f{{status}}"
+
+    def __init__(self, cfg: dict, palette: Palette):
+        self.cfg = cfg
+        self.palette = palette
+        self.last_id = None
+        self._art_cache: dict[str, dict] = {}
+
+    def poll(self) -> bool:
+        try:
+            out = subprocess.run(
+                ["playerctl", "-p", self.cfg["player"], "metadata", "--format", self.FMT],
+                capture_output=True, text=True, timeout=4,
+            )
+        except Exception:
+            return False
+        if out.returncode != 0:
+            if self.last_id is not None:  # player went away
+                self.last_id = None
+                self.palette.set_accent(None, {})
+                return True
+            return False
+
+        parts = out.stdout.strip().split("\x1f")
+        while len(parts) < 5:
+            parts.append("")
+        track_id, art_url, title, artist, status = parts[:5]
+        track = {"title": title, "artist": artist, "art": art_url, "status": status}
+
+        if track_id == self.last_id:
+            if track != self.palette.track:  # play/pause only
+                self.palette.track = track
+            return False
+        self.last_id = track_id
+
+        accent = self._accent_for(art_url) if art_url else None
+        self.palette.set_accent(accent, track)
+        log(f"track: {artist} - {title}" + ("" if accent else "  (no art accent)"))
+        return True
+
+    def _accent_for(self, url: str) -> dict | None:
+        if not self.cfg["album_art_accent"]:
+            return None
+        if url in self._art_cache:
+            return self._art_cache[url]
+        path = self._download(url)
+        if not path:
+            return None
+
+        accent = None
+        found = dominant_colour(path)
+        if found:
+            colour, sat = found
+            # A near-grey cover has no accent to give; leaving it to the
+            # wallpaper palette looks far better than a washed-out grey UI.
+            if sat >= self.cfg["min_art_saturation"]:
+                accent = _matugen_json(
+                    ["color", "hex", colour], self.cfg, ACCENT_ROLES
+                )
+        else:
+            # No Pillow: fall back to letting matugen read the file itself.
+            accent = _matugen_json(
+                ["image", str(path), "--prefer", self.cfg["matugen_prefer"]],
+                self.cfg, ACCENT_ROLES,
+            )
+        if accent:
+            self._art_cache[url] = accent
+            if len(self._art_cache) > 200:
+                self._art_cache.pop(next(iter(self._art_cache)))
+        return accent
+
+    @staticmethod
+    def _download(url: str) -> Path | None:
+        if not url.startswith(("http://", "https://")):
+            if url.startswith("file://"):
+                p = Path(url[7:])
+                return p if p.exists() else None
+            return None
+        name = hashlib.sha1(url.encode()).hexdigest() + ".img"
+        path = ART_DIR / name
+        if path.exists() and path.stat().st_size > 0:
+            return path
+        try:
+            subprocess.run(
+                ["curl", "-fsSL", "--max-time", "8", "-o", str(path), url],
+                check=True, capture_output=True,
+            )
+        except Exception:
+            path.unlink(missing_ok=True)
+            return None
+        return path if path.stat().st_size > 0 else None
+
+
+# --------------------------------------------------------------------------
+# server
+# --------------------------------------------------------------------------
+
+class Server:
+    def __init__(self, cfg: dict):
+        self.cfg = cfg
+        self.clients: set = set()
+        self.tap = SourceTap(cfg) if cfg.get("audio_source") == "spotify" else None
+        self.analyser = Analyser(cfg)
+        self.palette = Palette(cfg)
+        self.tracks = TrackWatcher(cfg, self.palette)
+        self.hypr = Hypr(cfg["hyprland_borders"])
+        self.roles: dict = {}      # ws -> "ui" | "meter"
+        self.ui_visible = True     # is the Spotify window actually on screen?
+        self.bar_visible = True    # is anything on screen at all (vs fullscreen)?
+        self._sent_version = -1
+        self._last_border = 0.0
+        self._last_border_step = -1
+
+    # -- websocket --------------------------------------------------------
+    async def handler(self, ws, *_):
+        self.clients.add(ws)
+        self.roles[ws] = "meter"
+        log(f"client connected ({len(self.clients)} total)")
+        try:
+            await ws.send(json.dumps(self.palette.message()))
+            async for msg in ws:
+                # Clients may identify themselves ({"role":"ui"}); anything
+                # else is simply a request to resend the palette.
+                try:
+                    role = json.loads(msg).get("role")
+                    if role in ("ui", "meter"):
+                        self.roles[ws] = role
+                except Exception:
+                    pass
+                await ws.send(json.dumps(self.palette.message()))
+        except Exception:
+            pass
+        finally:
+            self.clients.discard(ws)
+            self.roles.pop(ws, None)
+            log(f"client disconnected ({len(self.clients)} left)")
+
+    def _targets(self, frames: bool) -> list:
+        """Who should receive this message.
+
+        Frame traffic is withheld from the Spotify UI while its window is off
+        screen. Spotify runs under XWayland, which never reports occlusion to
+        Electron -- `document.hidden` stays false forever there -- so the
+        extension cannot idle itself. Gating the stream here is what actually
+        stops it rendering into a window nobody can see.
+        """
+        if not frames:
+            return list(self.clients)
+        if not self.bar_visible:
+            return []   # a fullscreen window covers every consumer we have
+        if self.ui_visible:
+            return list(self.clients)
+        return [ws for ws in self.clients if self.roles.get(ws) != "ui"]
+
+    async def broadcast(self, payload: dict, frames: bool = False) -> None:
+        targets = self._targets(frames)
+        if not targets:
+            return
+        data = json.dumps(payload, separators=(",", ":"))
+        for ws in targets:
+            try:
+                await ws.send(data)
+            except Exception:
+                self.clients.discard(ws)
+                self.roles.pop(ws, None)
+
+    def _has_live_ui(self) -> bool:
+        return (self.bar_visible and self.ui_visible
+                and any(r == "ui" for r in self.roles.values()))
+
+    # -- Hyprland borders -------------------------------------------------
+    def drive_borders(self, now: float) -> None:
+        if not self.hypr.enabled:
+            return
+        interval = 1.0 / max(1, self.cfg["hyprland_max_hz"])
+        if now - self._last_border < interval:
+            return
+        eff = self.palette.effective()
+        energy = max(self.analyser.beat_env, self.analyser.bass * 0.7)
+        # Quantise so a steady signal stops re-issuing identical keywords.
+        step = int(energy * 5)
+        if step == self._last_border_step:
+            return
+        self._last_border_step = step
+        self._last_border = now
+        factor = 0.55 + 0.65 * (step / 5.0)
+        self.hypr.borders(
+            scale(eff["primary"], factor),
+            scale(eff["tertiary"], factor * 0.9),
+            int(self.cfg["border_angle"]),
+        )
+
+    # -- periodic tasks ---------------------------------------------------
+    async def track_loop(self) -> None:
+        while True:
+            try:
+                await asyncio.to_thread(self.tracks.poll)
+            except Exception as exc:
+                log(f"track poll failed: {exc}")
+            await asyncio.sleep(1.0)
+
+    def refresh_visibility(self) -> None:
+        if not self.hypr.available:
+            return
+        clients = self.hypr.query("j/clients")
+        monitors = self.hypr.query("j/monitors")
+        if clients is None or monitors is None:
+            return
+        wanted = self.cfg["ui_window_class"].lower()
+        on = set()
+        for m in monitors:
+            ws = (m.get("activeWorkspace") or {}).get("id")
+            if ws is not None:
+                on.add(ws)
+            sp = (m.get("specialWorkspace") or {}).get("id")
+            if sp:
+                on.add(sp)
+        visible = False
+        fullscreen = False
+        for c in clients:
+            same_screen = (c.get("workspace") or {}).get("id") in on
+            # fullscreen == 2 is real fullscreen (1 is only maximised, which
+            # still leaves waybar and the window borders on screen).
+            if same_screen and c.get("fullscreen") == 2:
+                fullscreen = True
+            if wanted not in str(c.get("class", "")).lower():
+                continue
+            if c.get("hidden") or not c.get("mapped", True):
+                continue
+            if same_screen:
+                visible = True
+        if visible != self.ui_visible:
+            self.ui_visible = visible
+            log(f"Spotify window {'visible' if visible else 'off screen'}"
+                f" -> frame stream {'resumed' if visible else 'paused'}")
+
+        bar = not (fullscreen and self.cfg["pause_on_fullscreen"])
+        if bar != self.bar_visible:
+            self.bar_visible = bar
+            log("everything reactive is covered by a fullscreen window -> paused"
+                if not bar else "fullscreen window gone -> resumed")
+
+    async def visibility_loop(self) -> None:
+        while True:
+            try:
+                await asyncio.to_thread(self.refresh_visibility)
+            except Exception as exc:
+                log(f"visibility poll failed: {exc}")
+            await asyncio.sleep(1.0)
+
+    async def wallpaper_loop(self) -> None:
+        while True:
+            try:
+                self.palette.reload_base()
+            except Exception as exc:
+                log(f"wallpaper poll failed: {exc}")
+            await asyncio.sleep(2.0)
+
+    async def frame_loop(self) -> None:
+        fast = 1.0 / max(1, self.cfg["framerate"])
+        slow = 1.0 / max(1, self.cfg["idle_framerate"])
+        while True:
+            now = time.monotonic()
+            if self.palette.version != self._sent_version:
+                self._sent_version = self.palette.version
+                await self.broadcast(self.palette.message())
+                self._last_border_step = -1  # force a border refresh on recolour
+            await self.broadcast(self.analyser.snapshot(), frames=True)
+            self.drive_borders(now)
+            # Only the Spotify UI needs 60 fps. With it hidden or absent, the
+            # waybar meter is the only consumer and it redraws far slower.
+            period = fast if self._has_live_ui() else slow
+            await asyncio.sleep(max(0.0, period - (time.monotonic() - now)))
+
+    async def close_clients(self) -> None:
+        for ws in list(self.clients):
+            try:
+                await ws.close()
+            except Exception:
+                pass
+        self.clients.clear()
+
+    async def serve_until(self, stop: asyncio.Event) -> None:
+        # Bring the single-application tap up before cava opens its source,
+        # and fall back to the whole desktop if it does not appear.
+        if self.tap is not None:
+            self.tap.start()
+            if self.tap.wait_ready():
+                self.analyser.source = self.tap.source
+                log(f"audio source: {self.tap.node} only (via {self.tap.source})")
+            else:
+                log("tap did not come up; falling back to the default sink monitor")
+                self.tap.stop()
+                self.tap = None
+        if self.tap is None:
+            log("audio source: default sink monitor (all applications)")
+        self.analyser.start()
+        server = await websockets.serve(
+            self.handler, "127.0.0.1", self.cfg["port"], ping_interval=20
+        )
+        log(f"listening on ws://127.0.0.1:{self.cfg['port']}")
+
+        tasks = [
+            asyncio.ensure_future(self.frame_loop()),
+            asyncio.ensure_future(self.track_loop()),
+            asyncio.ensure_future(self.wallpaper_loop()),
+            asyncio.ensure_future(self.visibility_loop()),
+        ]
+        stopper = asyncio.ensure_future(stop.wait())
+        try:
+            done, _ = await asyncio.wait(
+                tasks + [stopper], return_when=asyncio.FIRST_COMPLETED
+            )
+            for task in done:
+                if task is not stopper:
+                    exc = task.exception()
+                    if exc is not None:
+                        raise exc  # a crashed loop is a real failure
+        finally:
+            for task in tasks + [stopper]:
+                task.cancel()
+            await asyncio.gather(*tasks, stopper, return_exceptions=True)
+            # Connected clients hold the server open: websockets waits for
+            # every handler to return, and ours block on `async for`. Without
+            # closing them first, SIGTERM never actually stops the process.
+            await self.close_clients()
+            server.close()
+            try:
+                await asyncio.wait_for(server.wait_closed(), timeout=3)
+            except asyncio.TimeoutError:
+                log("websocket server did not close cleanly")
+
+    def shutdown(self) -> None:
+        self.analyser.stop()
+        if self.tap is not None:
+            self.tap.stop()
+        self.hypr.restore()
+
+
+def single_instance(port: int) -> None:
+    """Refuse to start twice -- two daemons would fight over the borders."""
+    probe = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    probe.settimeout(0.3)
+    if probe.connect_ex(("127.0.0.1", port)) == 0:
+        probe.close()
+        sys.exit(f"beatd: already running on port {port}")
+    probe.close()
+
+
+def main() -> None:
+    ap = argparse.ArgumentParser(prog="beatd", description=__doc__)
+    ap.add_argument("--no-hypr", action="store_true", help="don't touch window borders")
+    ap.add_argument("--no-art", action="store_true", help="wallpaper palette only")
+    ap.add_argument("--port", type=int, help="override the websocket port")
+    args = ap.parse_args()
+
+    for d in (CFG_DIR, CACHE_DIR, ART_DIR):
+        d.mkdir(parents=True, exist_ok=True)
+
+    cfg = load_config()
+    if args.no_hypr:
+        cfg["hyprland_borders"] = False
+    if args.no_art:
+        cfg["album_art_accent"] = False
+    if args.port:
+        cfg["port"] = args.port
+
+    single_instance(cfg["port"])
+
+    server = Server(cfg)
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+
+    stop = asyncio.Event()
+    for sig in (signal.SIGINT, signal.SIGTERM):
+        try:
+            loop.add_signal_handler(sig, stop.set)
+        except NotImplementedError:
+            pass
+
+    try:
+        loop.run_until_complete(server.serve_until(stop))
+    except KeyboardInterrupt:
+        pass
+    finally:
+        server.shutdown()
+        loop.close()
+        log("stopped")
+
+
+if __name__ == "__main__":
+    main()

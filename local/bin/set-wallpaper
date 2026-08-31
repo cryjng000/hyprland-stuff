@@ -1,0 +1,27 @@
+#!/usr/bin/env bash
+# set-wallpaper <path> -- paint the desktop background.
+# Images go to swaybg; videos to mpvpaper. They fight over the background
+# layer, so whichever isn't wanted is killed first.
+set -uo pipefail
+PATH="$HOME/.local/bin:$PATH"
+
+WP="${1:?usage: set-wallpaper <image|video>}"
+[ -f "$WP" ] || { echo "no such file: $WP" >&2; exit 1; }
+
+case "${WP,,}" in
+    *.mp4|*.webm|*.mkv|*.mov|*.avi|*.gif)
+        command -v mpvpaper >/dev/null 2>&1 || { echo "mpvpaper not installed" >&2; exit 1; }
+        pkill swaybg   2>/dev/null || true
+        pkill mpvpaper 2>/dev/null || true
+        sleep 0.3
+        # -f fork, -p auto-pause when covered (keeps CPU down behind windows)
+        setsid mpvpaper -f -p -o "no-audio loop" '*' "$WP" >/dev/null 2>&1 </dev/null &
+        ;;
+    *)
+        command -v swaybg >/dev/null 2>&1 || { echo "swaybg not installed" >&2; exit 1; }
+        pkill mpvpaper 2>/dev/null || true
+        pkill swaybg   2>/dev/null || true
+        sleep 0.3
+        setsid swaybg -i "$WP" -m fill >/dev/null 2>&1 </dev/null &
+        ;;
+esac

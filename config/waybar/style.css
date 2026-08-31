@@ -1,0 +1,318 @@
+@import "colors.css";
+
+
+* {
+	font-family: "JetBrainsMono Nerd Font";  /* Propo variant isn't installed; it fell back to Noto Sans, which has no icon glyphs */
+	font-weight: bold;
+	min-height: 0;
+	/* set font-size to 100% if font scaling is set to 1.00 using nwg-look */
+	font-size: 98%;
+}
+
+window#waybar,
+window#waybar.empty,
+window#waybar.empty #window {
+    background-color: transparent;
+    padding: 0px;
+    border: 0px;
+}
+
+tooltip {
+	color: @inverse_surface;
+    background: rgba(0, 0, 0, 0.8);
+    border-radius: 20px;
+}
+
+tooltip label{
+	color: @inverse_surface;
+}
+/*-----module groups----*/
+.modules-right {
+	/*background-color: rgba(0,0,0,0.5);*/
+	color: @secondary;
+/*	border-bottom: 0px;
+	border-style: solid;
+	border-color: white;
+	border-radius: 20px;*/
+	padding-top: 2px;
+	padding-bottom: 2px;
+	padding-right: 4px;
+	padding-left: 4px;
+}
+.modules-center {
+	/*background-color: rgba(0,0,0,0.5);*/
+	color: @secondary;
+/*	border-bottom: 0px;
+	border-style: solid;
+	border-color: white;
+	border-radius: 20px;*/
+	padding-top: 2px;
+	padding-bottom: 2px;
+	padding-right: 4px;
+	padding-left: 4px;
+}
+.modules-left {
+	/*background-color: rgba(0,0,0,0.5);*/
+	color: @secondary;
+	/*border-bottom: 0px;
+	border-style: solid;
+	border-color: white;
+	border-radius: 20px;*/
+	padding-top: 2px;
+	padding-bottom: 2px;
+	padding-right: 4px;
+	padding-left: 4px;
+}
+/*-----modules indv----*/
+#taskbar button,
+#workspaces button {
+	color: @outline;
+    box-shadow: none;
+	  text-shadow: none;
+	  padding: 0px;
+	  padding-bottom: 0px;
+	  padding-top: 1px;
+    border-radius: 9px;
+    padding-left: 4px;
+    padding-right: 4px;
+    animation: gradient_f 20s ease-in infinite;
+    transition: all 0.5s cubic-bezier(.55,-0.68,.48,1.682);
+}
+#taskbar button:hover,
+#workspaces button:hover {
+    color: @primary;
+    border-radius: 20px;
+ 	  padding-left: 2px;
+    padding-right: 2px;
+    animation: gradient_f 20s ease-in infinite;
+    transition: all 0.3s cubic-bezier(.55,-0.68,.48,1.682);
+}
+
+#taskbar button.active,
+#workspaces button.active {
+	color: @background;
+	  background-color: alpha(@primary_fixed, 0.75);
+    padding-left: 10px;
+    padding-right: 10px;
+    animation: gradient_f 20s ease-in infinite;
+    transition: all 0.3s cubic-bezier(.55,-0.68,.48,1.682);
+}
+
+#workspaces button.urgent {
+    color: @primary;
+    border-radius: 10px;
+}
+
+#workspaces button.persistent {
+	border-radius: 10px;
+}
+
+#custom-swaync {
+  background-color: alpha(@surface_container, 0.75);
+ /* border: 1px solid @surface_container; */
+  border-radius: 20px;
+	padding-top: 5px;
+	padding-bottom: 5px;
+	padding-right: 8px;
+	padding-left: 15px;
+	margin: 0 0 0 5px;
+}
+
+#backlight,
+#backlight-slider,
+#battery,
+#bluetooth,
+#clock,
+#cpu,
+#disk,
+#idle_inhibitor,
+#keyboard-state,
+#memory,
+#mode,
+#mpris,
+#network,
+#power-profiles-daemon,
+#pulseaudio,
+#pulseaudio-slider,
+#taskbar,
+#temperature,
+#tray,
+#window,
+#wireplumber,
+#workspaces,
+#custom-backlight,
+#custom-browser,
+#custom-cava_mviz,
+#custom-cycle_wall,
+#custom-dot_update,
+#custom-file_manager,
+#custom-keybinds,
+#custom-keyboard,
+#custom-light_dark,
+#custom-lock,
+#custom-hint,
+#custom-hypridle,
+#custom-menu,
+#custom-playerctl,
+#custom-power_vertical,
+#custom-power,
+#custom-quit,
+#custom-reboot,
+#custom-settings,
+#custom-spotify,
+#custom-tty,
+#custom-updater,
+#custom-weather,
+#custom-weather.clearNight,
+#custom-weather.cloudyFoggyDay,
+#custom-weather.cloudyFoggyNight,
+#custom-weather.default, 
+#custom-weather.rainyDay,
+#custom-weather.rainyNight,
+#custom-weather.severe,
+#custom-weather.showyIcyDay,
+#custom-weather.snowyIcyNight,
+#custom-weather.sunnyDay {
+  background-color: alpha(@surface_container, 0.75);
+ /* border: 1px solid @surface_container; */
+  border-radius: 20px;
+	padding-top: 5px;
+	padding-bottom: 5px;
+	padding-right: 9px;
+	padding-left: 9px;
+	margin: 0 0 0 5px;
+}
+/*-----Indicators----*/
+#custom-hypridle.notactive,
+#idle_inhibitor.activated {
+	color: #39FF14;
+}
+
+#pulseaudio.muted {
+	color: #cc3436;
+}
+#temperature.critical {
+	color: red;
+}
+
+@keyframes blink {
+	to {
+		color: #000000;
+	}
+}
+
+#battery.critical:not(.charging) {
+	color: #f53c3c;
+}
+
+#backlight-slider slider,
+#pulseaudio-slider slider {
+	min-width: 0px;
+	min-height: 0px;
+	opacity: 0;
+	background-image: none;
+	border: none;
+	box-shadow: none;
+}
+
+#backlight-slider trough,
+#pulseaudio-slider trough {
+	min-width: 80px;
+	min-height: 5px;
+	border-radius: 5px;
+}
+
+#backlight-slider highlight,
+#pulseaudio-slider highlight {
+	min-height: 10px;
+	border-radius: 5px;
+}
+
+/* ---- beatsync spectrum ------------------------------------------------ */
+/* Colours come from matugen's colors.css, so this follows the wallpaper. */
+#custom-beatsync {
+	color: @primary;
+	padding: 0 10px;
+	font-size: 14px;
+	letter-spacing: -1px;
+}
+
+#custom-beatsync.beat {
+	color: @tertiary;
+	text-shadow: 0 0 6px @primary;
+}
+
+#custom-beatsync.off {
+	color: @outline_variant;
+}
+
+/* ---- dynamic island ---------------------------------------------------- */
+/* group/island is drawn as ONE pill: the group owns the background and the
+   modules inside it go transparent, so opening the drawer grows a single
+   container instead of sprouting a row of separate bubbles. */
+
+#island {
+	background-color: alpha(@surface_container, 0.78);
+	border: 1px solid alpha(@outline_variant, 0.4);
+	border-radius: 22px;
+	padding: 0px 3px;
+	margin: 0px;
+	transition: background-color 350ms cubic-bezier(0.32, 0.72, 0, 1),
+	            border-color 350ms cubic-bezier(0.32, 0.72, 0, 1);
+}
+
+#island:hover {
+	background-color: alpha(@surface_container_high, 0.92);
+	border-color: alpha(@primary, 0.5);
+}
+
+/* the collapsed half */
+#island #custom-island {
+	background-color: transparent;
+	border: none;
+	border-radius: 0px;
+	margin: 0px;
+	padding: 5px 14px;
+	min-width: 165px;
+	color: @on_surface;
+	transition: color 300ms ease;
+}
+
+#island #custom-island.playing { color: @primary; }
+#island #custom-island.paused  { color: @outline; }
+#island #custom-island.system  { color: @secondary; }
+#island #custom-island.alert   { color: @error; }
+
+/* everything the drawer slides out. The ids are listed alongside
+   .island-child because a children-class only lands once the drawer is
+   built; the id selectors are what reliably out-weigh the generic
+   "#cpu { background-color: ... }" pill rule above. */
+#island .island-child,
+#island #network,
+#island #cpu,
+#island #memory,
+#island #temperature,
+#island #disk {
+	background-color: transparent;
+	border: none;
+	border-radius: 0px;
+	margin: 0px;
+	padding: 5px 9px;
+	color: @secondary;
+}
+
+#island .island-child:hover,
+#island #network:hover,
+#island #cpu:hover,
+#island #memory:hover,
+#island #temperature:hover,
+#island #disk:hover           { color: @primary; }
+
+#island #temperature.critical { color: @error; }
+#island #network.disconnected { color: @error; }
+
+/* a hairline between the pill and the expanded detail */
+#island #network {
+	border-left: 1px solid alpha(@outline_variant, 0.35);
+	padding-left: 12px;
+}
