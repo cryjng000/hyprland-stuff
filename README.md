@@ -10,6 +10,7 @@ shell re-skins from one command.
 - **Notifications** — mako · **Launcher** — rofi 1.7.5 (fuzzel as fallback)
 - **Terminal** — kitty 0.48.2 · **Wallpaper** — swaybg for images, mpvpaper for video
 - **Extras** — a GTK dynamic island, and an audio-reactive beat daemon
+- **Apps** — Spotify (spicetify) and Discord (Vesktop) themed to match
 
 ## The idea
 
@@ -32,6 +33,8 @@ config/
   matugen/     config.toml + templates/  <- the source of truth for all colour
   beatsync/    beat-detection daemon settings
   kitty/ rofi/ gtk-3.0/ gtk-4.0/
+  spicetify/   Glass theme for Spotify + the beatsync extension
+  vesktop/     Vencord settings + the Glass Discord quickCss
 local/bin/
   retheme          re-theme everything from a wallpaper (the main entry point)
   set-wallpaper    swaybg for images, mpvpaper for video
@@ -57,6 +60,29 @@ retheme ~/.config/wallpapers/some-wallpaper.jpg
 `install.sh` symlinks whole directories where a directory holds only tracked
 files, and single files where matugen also writes generated colours into the same
 directory (kitty, rofi, gtk-3.0, gtk-4.0).
+
+### Spotify and Discord
+
+Both need one step that `install.sh` cannot do for you.
+
+**Spotify** — the theme and extension are linked into `~/.config/spicetify`, but
+spicetify still has to inject them:
+
+```sh
+spicetify config current_theme Glass color_scheme base
+spicetify config extensions beatsync.js
+spicetify apply
+```
+
+`config-xpui.ini` itself is **not tracked** — spicetify rewrites it on every
+`apply` and it stores absolute paths to the Spotify install, which differ per
+machine. The commands above set everything from it that matters.
+
+**Discord** — the Vesktop files are copied into the flatpak's config directory
+(see below for why they are not linked). Restart Vesktop afterwards; Vencord
+reads `quickCss.css` at startup. `transparent: true` in the Vencord settings and
+the Hyprland window rule are both required — either one alone leaves the window
+opaque.
 
 ### Dependencies
 
@@ -94,6 +120,16 @@ These are all deliberate, and each is commented where it applies.
 - **Spotify's transparency comes from a Hyprland window rule**, not from CSS.
   Spotify is CEF and its switch table has no `enable-transparent-visuals`, so the
   window is opaque no matter what a Spicetify theme asks for.
+- **Vesktop's config is copied, not symlinked.** Vesktop is a flatpak and its
+  sandbox is granted only `xdg-download`, `xdg-pictures`, `xdg-videos`,
+  `~/.icons` and `~/.steam`. A symlink into `~/dotfiles` resolves to nothing
+  from inside the app, so `install.sh` copies those three files in. Edit them
+  here and re-run it; changes made inside the client have to be copied back.
+- **Discord's transparency is two-layered, unlike Spotify's.** Electron does
+  honour `transparent: true`, so the window itself can be see-through — but
+  every surface inside it is painted by Discord's own CSS tokens, which
+  `quickCss.css` has to clear one family at a time. Tune the four `--glass-*`
+  alphas at the top of that file; the rest derives from them.
 - **Sober (Roblox) has every decoration stripped.** Rounding, borders, blur and
   shadows each disqualify a window from direct scanout; without them Hyprland can
   hand the buffer straight to the display controller, which matters on an APU

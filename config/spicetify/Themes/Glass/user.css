@@ -1,0 +1,245 @@
+/* ============================================================
+   Glass -- glassmorphic Spotify to match the Hyprland desktop.
+
+   How the glass actually works here (this matters, and it is NOT
+   the same mechanism as the Vesktop/Discord setup):
+
+   Discord gets REAL per-element window alpha, because Electron
+   honours `transparent: true`. Spotify cannot: this build is CEF
+   (Chromium 146) and its switch table has no `enable-transparent-
+   visuals` -- verified with `strings /usr/share/spotify/spotify`.
+   So CSS alpha here composites onto CEF's own opaque base, never
+   onto the wallpaper.
+
+   Therefore the two jobs are split:
+     * Hyprland supplies the see-through + blur, uniformly, via a
+       window opacity rule on class ^Spotify$ (see hyprland.lua).
+     * This file supplies the DEPTH -- the ground is pushed to pure
+       black (the least "paint", so the blurred wallpaper reads
+       through it best) and panels are lifted off it with small
+       white overlays and hairline strokes, so they read as frosted
+       panes stacked on that backdrop.
+
+   Tune the five alphas in section 0; everything else derives.
+   Token names verified against xpui-snapshot.css for 1.2.95.
+   ============================================================ */
+
+/* --- 0. tunables ---------------------------------------------------- */
+:root {
+  --glass-panel:  rgba(255, 255, 255, 0.050);  /* nav bar, right sidebar */
+  --glass-main:   rgba(255, 255, 255, 0.028);  /* main scroll area       */
+  --glass-raised: rgba(255, 255, 255, 0.075);  /* cards, search field    */
+  --glass-float:  rgba(16, 18, 24, 0.86);      /* menus, popovers        */
+  --glass-modal:  rgba(10, 12, 17, 0.94);      /* dialogs                */
+
+  --glass-line:      rgba(255, 255, 255, 0.075);
+  --glass-line-soft: rgba(255, 255, 255, 0.045);
+  --glass-hover:     rgba(255, 255, 255, 0.060);
+  --glass-active:    rgba(255, 255, 255, 0.100);
+
+  /* Matches decoration.rounding = 10 in hyprland.lua. */
+  --glass-radius: 12px;
+  --glass-blur:   blur(22px) saturate(140%);
+}
+
+/* --- 1. the ground -------------------------------------------------- */
+/* .Root__top-container paints var(--spice-sidebar) across the whole app.
+   Pure black + no paint of its own is what lets Hyprland's opacity read
+   as wallpaper rather than as a grey wash. */
+html,
+body,
+#main,
+.Root,
+.Root__top-container {
+  background-color: #000 !important;
+}
+
+.Root__top-container {
+  --panel-gap: 8px;
+}
+
+/* --- 2. the floating panes ------------------------------------------ */
+/* box-shadow rather than border: a 1px border would eat into the fixed
+   grid widths and shift the layout. */
+.Root__nav-bar,
+.Root__main-view,
+.Root__right-sidebar-peek,
+.Root__right-sidebar-overlay,
+.Root__right-sidebar-overlayWrapper,
+.Root__right-sidebar-peekContent,
+.main-yourLibraryX-entryPoints {
+  border-radius: var(--glass-radius) !important;
+  box-shadow:
+    inset 0 0 0 1px var(--glass-line),
+    inset 0 1px 0 rgba(255, 255, 255, 0.05) !important;
+}
+
+.Root__nav-bar,
+.Root__right-sidebar-peek,
+.Root__right-sidebar-overlay,
+.Root__right-sidebar-overlayWrapper,
+.main-yourLibraryX-entryPoints {
+  background-color: var(--glass-panel) !important;
+}
+
+.Root__main-view {
+  background-color: var(--glass-main) !important;
+}
+
+/* The player strip has negative margins and spans the full width, so it
+   cannot be a rounded pane. Left as bare ground, with a hairline to
+   separate it -- the same move as Discord's bottom user panel. */
+.Root__now-playing-bar {
+  background-color: transparent !important;
+  box-shadow: inset 0 1px 0 var(--glass-line-soft);
+}
+
+.Root__globalNav {
+  background-color: transparent !important;
+}
+
+/* --- 3. encore tokens ----------------------------------------------- */
+/* Almost everything here is already correct: the .encore-dark-theme block
+   maps --background-* onto --spice-*, which color.ini now sets to the
+   near-blacks this theme wants.
+
+   Deliberately NOT made translucent. These tokens are read by things that
+   have to MASK what is behind them -- .e-10451-table-header-cell is the
+   sticky tracklist header (rows would scroll visibly through it), and
+   .e-10451-overlay / .tippy-arrow are tooltips. Translucency belongs on the
+   named surfaces in sections 2 and 4, not on the shared tokens.
+
+   The one value that needs catching is --background-elevated-press: it is
+   hardcoded to #191919 in the stylesheet rather than derived from --spice-*,
+   so it stays a warm grey against this cool near-black palette. */
+.encore-dark-theme,
+.encore-dark-theme .encore-base-set {
+  --background-elevated-press: #22252e;
+}
+
+/* --- 4. floating layers get real in-page glass ---------------------- */
+/* backdrop-filter works fine INSIDE the page -- it blurs the Spotify content
+   sitting behind the popover. This is the one place the theme gets genuine
+   glass on its own, without help from the compositor, and it is what sells
+   the depth.
+
+   Encore's class names carry a per-release hash (.e-10451-* in 1.2.95), so
+   the stable half of the name is matched instead of the whole class -- the
+   same approach the Discord QuickCSS takes with [class*="modal_"]. Matching
+   the full name would silently stop working on the next Spotify update. */
+.main-contextMenu-menu,
+.main-contextMenu-tippy,
+.main-dropDown-dropDown,
+[class*="-popover"] {
+  background-color: var(--glass-float) !important;
+  -webkit-backdrop-filter: var(--glass-blur);
+          backdrop-filter: var(--glass-blur);
+  border-radius: var(--glass-radius) !important;
+  box-shadow:
+    inset 0 0 0 1px var(--glass-line),
+    0 12px 32px rgba(0, 0, 0, 0.55) !important;
+}
+
+/* Tooltips are small; the panel radius reads as a blob on them. */
+.tippy-box {
+  background-color: var(--glass-float) !important;
+  -webkit-backdrop-filter: var(--glass-blur);
+          backdrop-filter: var(--glass-blur);
+  border-radius: 8px !important;
+  box-shadow: inset 0 0 0 1px var(--glass-line) !important;
+}
+
+.GenericModal,
+[class*="-dialog-alert"],
+[class*="-dialog-confirmation"],
+[class*="-dialog-full-screen"],
+.main-playlistEditDetailsModal-container,
+.main-duplicateTrackModal-container {
+  background-color: var(--glass-modal) !important;
+  -webkit-backdrop-filter: var(--glass-blur);
+          backdrop-filter: var(--glass-blur);
+  border-radius: var(--glass-radius) !important;
+  box-shadow:
+    inset 0 0 0 1px var(--glass-line),
+    0 24px 64px rgba(0, 0, 0, 0.6) !important;
+}
+
+.GenericModal__overlay {
+  background-color: rgba(0, 0, 0, 0.55) !important;
+  -webkit-backdrop-filter: blur(6px);
+          backdrop-filter: blur(6px);
+}
+
+.main-contextMenu-menuItemButton:hover,
+.main-contextMenu-menuItemButton:focus {
+  background-color: var(--glass-hover) !important;
+  border-radius: 6px;
+}
+
+/* --- 5. rows, cards, hovers ----------------------------------------- */
+.main-card-card {
+  background: var(--glass-raised) !important;
+  border-radius: var(--glass-radius) !important;
+  box-shadow: inset 0 0 0 1px var(--glass-line-soft);
+  transition: background-color .2s ease, box-shadow .2s ease;
+}
+
+.main-card-card:hover {
+  background: var(--glass-active) !important;
+  box-shadow: inset 0 0 0 1px var(--glass-line);
+}
+
+/* --- 6. top bar / search -------------------------------------------- */
+.main-topBar-searchBar {
+  background: var(--glass-raised) !important;
+  box-shadow: inset 0 0 0 1px var(--glass-line) !important;
+}
+
+.main-topBar-searchBar:hover,
+.main-topBar-searchBar:focus-within {
+  background: var(--glass-active) !important;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.16) !important;
+}
+
+.Root__globalNav .main-globalNav-navLink {
+  background-color: var(--glass-raised) !important;
+  box-shadow: inset 0 0 0 1px var(--glass-line-soft);
+}
+
+/* --- 7. entity header ----------------------------------------------- */
+/* The extracted album colour is painted as a solid slab, which reads as a
+   heavy opaque block sitting on the glass. Fade it out instead. */
+.main-entityHeader-backgroundColor,
+.main-actionBarBackground-background {
+  -webkit-mask-image: linear-gradient(to bottom, #000 0%, transparent 100%);
+          mask-image: linear-gradient(to bottom, #000 0%, transparent 100%);
+  opacity: 0.55 !important;
+}
+
+.main-entityHeader-shadow {
+  box-shadow: none !important;
+}
+
+/* --- 8. scrollbars --------------------------------------------------- */
+.os-scrollbar-handle {
+  background: rgba(255, 255, 255, 0.14) !important;
+  border-radius: 8px !important;
+}
+
+.os-scrollbar-handle:hover {
+  background: rgba(255, 255, 255, 0.24) !important;
+}
+
+.os-scrollbar-track {
+  background: transparent !important;
+}
+
+/* --- 9. legibility over the blur ------------------------------------ */
+/* Hyprland's opacity rule fades text along with everything else, so the
+   type is pushed brighter here to land back at normal contrast. */
+.encore-text-title-large,
+.encore-text-title-medium,
+.encore-text-title-small,
+.main-entityHeader-title {
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.55);
+}

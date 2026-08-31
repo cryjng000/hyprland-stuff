@@ -1,0 +1,101 @@
+/* ============================================================
+   Glass Discord — transparent background for Hyprland blur
+   Token names verified against the running client via CDP.
+   Tune the four alphas; everything else derives from them.
+   ============================================================ */
+
+:root {
+    --glass-chat:   rgba(0, 0, 0, 0.05);   /* message area          */
+    --glass-panel:  rgba(0, 0, 0, 0.15);   /* sidebars, member list */
+    --glass-float:  rgba(0, 0, 0, 0.55);   /* popouts, tooltips     */
+    --glass-modal:  rgba(0, 0, 0, 0.80);   /* dialogs, settings     */
+}
+
+/* --- 1. the token families this build actually paints with ---------- */
+:root,
+body,
+.theme-dark,
+.theme-light,
+.theme-midnight {
+    --app-bg: transparent !important;
+
+    /* base surfaces — these are the ones that were solid black */
+    --background-base-low:        var(--glass-panel) !important;
+    --background-base-lower:      var(--glass-chat)  !important;
+    --background-base-lowest:     var(--glass-panel) !important;
+
+    /* raised surfaces */
+    --background-surface-high:    var(--glass-float) !important;
+    --background-surface-higher:  var(--glass-float) !important;
+    --background-surface-highest: var(--glass-float) !important;
+
+    /* gradient trio Midnight falls back to */
+    --background-gradient-low:    transparent !important;
+    --background-gradient-lower:  transparent !important;
+    --background-gradient-lowest: transparent !important;
+    --background-gradient-chat:   transparent !important;
+    --background-gradient-app-frame: transparent !important;
+
+    /* legacy names, still used in older surfaces */
+    --background-primary:         var(--glass-chat)  !important;
+    --background-secondary:       var(--glass-panel) !important;
+    --background-secondary-alt:   var(--glass-panel) !important;
+    --background-tertiary:        var(--glass-panel) !important;
+    --background-floating:        var(--glass-float) !important;
+    --background-mobile-primary:   transparent !important;
+    --background-mobile-secondary: transparent !important;
+
+    /* newer aliases */
+    --bg-base-primary:    var(--glass-chat)  !important;
+    --bg-base-secondary:  var(--glass-panel) !important;
+    --bg-base-tertiary:   var(--glass-panel) !important;
+    --bg-overlay-chat:    transparent !important;
+    --bg-surface-overlay: var(--glass-float) !important;
+    --bg-surface-raised:  var(--glass-panel) !important;
+
+    --channeltextarea-background: var(--glass-panel) !important;
+    --app-frame-background: transparent !important;
+}
+
+/* --- 2. structural fallback: elements that hardcode a background ---- */
+html,
+body,
+#app-mount,
+[class*="appMount"],
+[class*="appAsidePanelWrapper"],
+[class*="notAppAsidePanel"],
+[class*="app_"],
+[class*="bg_"],
+[class*="baseLayer"],
+[class*="content_"],
+[class*="chatContent"],
+[class*="container__"],
+[class*="tabBody"],
+[class*="scroller__"],
+[class*="pageWrapper"] {
+    background: transparent !important;
+}
+
+[class*="guilds_"],
+[class*="privateChannels"],
+[class*="sidebar_"],
+[class*="membersWrap"],
+[class*="panels_"] {
+    background: var(--glass-panel) !important;
+}
+
+/* --- 3. keep floating things readable ------------------------------- */
+[class*="layerContainer"] > [class*="layer"],
+[class*="menu_"],
+[class*="tooltip_"],
+[class*="popout"],
+[class*="autocomplete"],
+[class*="modal_"] {
+    backdrop-filter: blur(16px);
+}
+
+/* --- 4. legibility over blur ---------------------------------------- */
+[class*="messageContent"],
+[class*="username"] {
+    text-shadow: 0 1px 2px rgba(0, 0, 0, 0.5);
+}
