@@ -1,7 +1,6 @@
 # dotfiles
 
-A Hyprland desktop built on Zorin OS 18.1 (Ubuntu 24.04 base), on a Ryzen 5 5600G
-with Vega integrated graphics. Everything that has a colour is generated from the
+A Hyprland desktop built on Zorin OS 18.1 (Ubuntu 24.04 base), Everything that has a colour is generated from the
 current wallpaper by [matugen](https://github.com/InioX/matugen), so the whole
 shell re-skins from one command.
 
