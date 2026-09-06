@@ -1,0 +1,372 @@
+/* Settings panel styling. Same token vocabulary as island/style.css:
+   @surface_container / @on_surface at low alpha for glass, @settings_accent
+   tiers (see palette.py) for anything interactive. If you retheme the
+   island's accent derivation later, mirror the change in palette.py so the
+   two panels don't drift apart. */
+
+window,
+window.background,
+window decoration {
+    background-color: transparent;
+    background-image: none;
+    box-shadow: none;
+    border: none;
+}
+
+/* ---- shell -------------------------------------------------------------- */
+/* Same reasoning as island: no outer box-shadow, GTK clips it to the layer
+   surface and it comes out as a hard grey box. Separation from the desktop
+   is the Hyprland blur rule, not CSS. */
+
+.settings-shell {
+    /* bumped back up from 0.50 -- at low opacity with theme-neutral greys
+       underneath, it read as flat/washed-out rather than glassy. Real
+       glass needs *something* tinted showing through, not just less of a
+       grey. Opacity plus the accent-tinted cards/sidebar below is what
+       actually reads as "glass over my wallpaper" instead of "grey box". */
+    background-color: alpha(@surface_container, 0.72);
+    border: 1px solid alpha(@settings_accent, 0.14);
+    border-radius: 22px;
+    box-shadow: inset 0 1px 0 alpha(@on_surface, 0.07);
+}
+
+/* ---- sidebar -------------------------------------------------------------- */
+/* Tinted by the accent rather than a neutral grey, so it actually reads as
+   *your* wallpaper's colour rather than a generic dark theme. */
+
+.sidebar {
+    background-color: alpha(@settings_accent, 0.05);
+    padding: 20px 10px;
+    border-right: 1px solid alpha(@settings_accent, 0.12);
+}
+
+.sidebar-item {
+    font-family: "JetBrainsMono Nerd Font";
+    font-size: 12px;
+    font-weight: bold;
+    color: @on_surface_variant;
+    background-color: transparent;
+    background-image: none;
+    border: none;
+    box-shadow: none;
+    border-radius: 12px;
+    padding: 10px 14px;
+    margin-bottom: 2px;
+    min-height: 0;
+    transition: background-color 220ms cubic-bezier(0.32, 0.72, 0, 1),
+                color 220ms cubic-bezier(0.32, 0.72, 0, 1),
+                box-shadow 220ms cubic-bezier(0.32, 0.72, 0, 1);
+}
+
+.sidebar-item:hover {
+    background-color: alpha(@settings_accent, 0.08);
+    color: @on_surface;
+}
+
+.sidebar-item.active {
+    background-color: alpha(@settings_accent, 0.24);
+    color: @settings_accent;
+    box-shadow: inset 0 1px 0 alpha(@on_surface, 0.10),
+                0 1px 3px alpha(@shadow, 0.25);
+}
+
+/* ---- section headers ---------------------------------------------------- */
+
+.section-title {
+    font-family: "JetBrainsMono Nerd Font";
+    font-size: 15px;
+    font-weight: bold;
+    color: @on_surface;
+    letter-spacing: 0.2px;
+}
+
+.section-subtitle {
+    font-family: "JetBrainsMono Nerd Font";
+    font-size: 10.5px;
+    color: @settings_accent_dim;
+}
+
+/* ---- monitor cards -------------------------------------------------------- */
+
+.metric-card {
+    background-color: alpha(@settings_accent, 0.06);
+    border: 1px solid alpha(@settings_accent, 0.12);
+    border-radius: 16px;
+    padding: 14px 16px;
+    transition: background-color 220ms ease, border-color 220ms ease;
+}
+
+.metric-card:hover {
+    background-color: alpha(@settings_accent, 0.10);
+    border-color: alpha(@settings_accent, 0.24);
+}
+
+.metric-label {
+    font-family: "JetBrainsMono Nerd Font";
+    font-size: 10.5px;
+    font-weight: bold;
+    color: @on_surface_variant;
+    letter-spacing: 0.4px;
+}
+
+.metric-value {
+    font-family: "JetBrainsMono Nerd Font";
+    font-size: 22px;
+    font-weight: bold;
+    color: @on_surface;
+}
+
+.metric-sub {
+    font-family: "JetBrainsMono Nerd Font";
+    font-size: 10px;
+    color: @settings_accent_muted;
+}
+
+/* thin usage bar under each metric card, same trough/highlight pattern as
+   island's sliders but without the interactive knob.
+
+   Gtk.ProgressBar's actual CSS node structure is progressbar > trough >
+   progress -- .usage-bar/.usage-bar-fill classes land on the outer
+   progressbar widget, so the trough/progress child selectors need to be
+   scoped under it explicitly or the colours silently fall back to the
+   theme's own grey trough, which is what was cutting a cool-grey line
+   across a warm accent card. */
+
+.usage-bar trough {
+    min-height: 5px;
+    border-radius: 4px;
+    background-color: alpha(@settings_accent, 0.14);
+}
+
+.usage-bar progress {
+    min-height: 5px;
+    border-radius: 4px;
+    background-color: @settings_accent;
+    transition: background-color 200ms ease;
+}
+
+.usage-bar-fill.warn progress,
+progressbar.warn progress { background-color: @tertiary; }
+.usage-bar-fill.crit progress,
+progressbar.crit progress { background-color: @error; }
+
+/* ---- sliders (Stage 2 controls reuse these) ------------------------------ */
+
+scale {
+    min-height: 14px;
+    padding: 0;
+}
+
+scale trough {
+    min-height: 5px;
+    border: none;
+    border-radius: 4px;
+    background-color: alpha(@on_surface, 0.12);
+    transition: min-height 160ms ease, background-color 160ms ease;
+}
+
+scale highlight {
+    min-height: 5px;
+    border-radius: 4px;
+    background-color: @settings_accent;
+    transition: min-height 160ms ease, background-color 160ms ease;
+}
+
+scale:hover trough,
+scale:hover highlight { min-height: 7px; }
+scale:hover trough    { background-color: alpha(@on_surface, 0.2); }
+
+scale slider {
+    min-width: 12px;
+    min-height: 12px;
+    margin: -4px;
+    border: none;
+    border-radius: 50%;
+    background-color: @settings_accent_muted;
+    box-shadow: none;
+    transition: background-color 160ms ease, box-shadow 160ms ease,
+                min-width 160ms ease, min-height 160ms ease;
+}
+
+scale:hover slider {
+    min-width: 14px;
+    min-height: 14px;
+    box-shadow: 0 1px 4px alpha(@shadow, 0.7);
+}
+
+scale:hover slider:active {
+    background-color: @settings_accent;
+    box-shadow: 0 0 0 4px alpha(@settings_accent, 0.25);
+}
+
+separator {
+    background-color: alpha(@on_surface, 0.10);
+    min-height: 1px;
+}
+
+/* ---- .dnd (discrete "do-it-now" buttons: mute toggles, +/- steppers) ----
+   These were only ever add_class()'d in settings.py with no matching rule
+   here, so they rendered as bare unstyled GTK labels -- no hover, no press
+   feedback, and .active (used for the mute-on state) did nothing. Same
+   token vocabulary as .sidebar-item, since both are a clickable label in
+   an EventBox with an .active toggle state. */
+
+.dnd {
+    font-family: "JetBrainsMono Nerd Font";
+    font-size: 10.5px;
+    font-weight: bold;
+    color: @on_surface_variant;
+    background-color: alpha(@settings_accent, 0.06);
+    border: 1px solid alpha(@settings_accent, 0.12);
+    border-radius: 10px;
+    padding: 6px 10px;
+    transition: background-color 180ms ease, color 180ms ease,
+                border-color 180ms ease;
+}
+
+.dnd:hover {
+    background-color: alpha(@settings_accent, 0.12);
+    color: @on_surface;
+    border-color: alpha(@settings_accent, 0.28);
+}
+
+/* mute engaged -- reuse the same "crit" red the usage bars escalate to
+   at 90%+, so a muted state reads as unambiguous everywhere in the panel */
+.dnd.active {
+    background-color: alpha(@error, 0.16);
+    color: @error;
+    border-color: alpha(@error, 0.35);
+}
+
+/* ---- .slider-value (the --% readouts beside OUTPUT/INPUT VOLUME) -------
+   Same story as .dnd: applied in settings.py, never styled, so it fell
+   back to GTK's default label color instead of the theme. */
+
+.slider-value {
+    font-family: "JetBrainsMono Nerd Font";
+    font-size: 11px;
+    font-weight: bold;
+    color: @settings_accent;
+}
+
+/* ---- scrollbar (GtkScrolledWindow wrapping the whole page stack) -------
+   GTK3 draws scrollbar > trough > slider; styled to sit inside the glass
+   shell rather than look like a bolted-on system scrollbar. Overlay mode
+   (see settings.py) keeps it from stealing layout width from page content
+   at rest -- it only widens on hover, same interaction language as the
+   trough/highlight bars above. */
+
+scrollbar {
+    background-color: transparent;
+    border: none;
+}
+
+scrollbar slider {
+    min-width: 6px;
+    background-color: alpha(@settings_accent, 0.25);
+    border: none;
+    border-radius: 4px;
+    transition: background-color 180ms ease, min-width 180ms ease;
+}
+
+scrollbar:hover slider {
+    min-width: 8px;
+    background-color: alpha(@settings_accent, 0.45);
+}
+
+scrollbar slider:active {
+    background-color: @settings_accent;
+}
+
+scrollbar.vertical trough {
+    background-color: alpha(@on_surface, 0.04);
+    border-radius: 4px;
+    margin: 4px 2px;
+}
+
+/* ---- toggle rows (Network/Display/Hyprland pages: Wi-Fi, tiling toggles,
+   boolean Hyprland keywords) -- GTK Switch reskinned to the same accent
+   language as .dnd.active rather than left as the default blue-and-grey
+   Adwaita switch, which would clash hard against the glass theme. */
+
+switch {
+    background-color: alpha(@on_surface, 0.14);
+    border: 1px solid alpha(@on_surface, 0.10);
+    border-radius: 999px;
+    min-width: 40px;
+    min-height: 22px;
+    transition: background-color 180ms ease, border-color 180ms ease;
+}
+
+switch:checked {
+    background-color: alpha(@settings_accent, 0.85);
+    border-color: alpha(@settings_accent, 0.9);
+}
+
+switch slider {
+    background-color: @on_primary;
+    border-radius: 999px;
+    min-width: 16px;
+    min-height: 16px;
+    margin: 2px;
+    box-shadow: 0 1px 3px alpha(@shadow, 0.4);
+}
+
+/* ---- list-row (Network device list, ComboBoxText popovers, generic
+   scannable rows used on the new pages) */
+
+.list-row {
+    padding: 8px 10px;
+    border-radius: 10px;
+    transition: background-color 180ms ease;
+}
+
+.list-row:hover {
+    background-color: alpha(@settings_accent, 0.07);
+}
+
+.list-row-title {
+    font-family: "JetBrainsMono Nerd Font";
+    font-size: 12px;
+    font-weight: bold;
+    color: @on_surface;
+}
+
+.list-row-sub {
+    font-family: "JetBrainsMono Nerd Font";
+    font-size: 10px;
+    color: @on_surface_variant;
+}
+
+/* ---- action-btn (Apply / Reload / Retheme-launcher buttons on the new
+   pages) -- a slightly heavier variant of .dnd for primary actions */
+
+.action-btn {
+    font-family: "JetBrainsMono Nerd Font";
+    font-size: 11px;
+    font-weight: bold;
+    color: @on_primary;
+    background-color: @settings_accent;
+    border: none;
+    border-radius: 10px;
+    padding: 8px 14px;
+    transition: background-color 180ms ease, box-shadow 180ms ease;
+}
+
+.action-btn:hover {
+    box-shadow: 0 1px 6px alpha(@settings_accent, 0.4);
+}
+
+.action-btn.secondary {
+    color: @settings_accent;
+    background-color: alpha(@settings_accent, 0.10);
+    border: 1px solid alpha(@settings_accent, 0.24);
+}
+
+.action-btn.secondary:hover {
+    background-color: alpha(@settings_accent, 0.16);
+}
+
+.status-ok    { color: @settings_accent; }
+.status-warn  { color: @tertiary; }
+.status-error { color: @error; }
