@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'none'; object-src 'none'; base-uri 'none'">
+  <title>Settings</title><link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div class="shell">
+    <aside class="sidebar">
+      <div class="brand"><span class="brand-mark" data-icon="settings"></span><span>Settings</span></div>
+      <div class="search-wrap"><span data-icon="search"></span><input id="search" aria-label="Find a setting" placeholder="Find a setting" autocomplete="off"><kbd>⌘ K</kbd></div>
+      <nav aria-label="Settings categories" id="navigation"></nav>
+      <div class="sidebar-bottom"><span class="live-dot"></span><div>Made for your desktop<small>Hyprland</small></div></div>
+    </aside>
+    <main>
+      <header class="topbar"><div><span class="breadcrumb">Your desktop</span><span class="breadcrumb-slash">/</span><span id="breadcrumb">Overview</span></div><button id="close" class="icon-button close" aria-label="Close settings" title="Close · Esc" data-icon="close"></button></header>
+      <div id="viewport" tabindex="-1"><div id="page"></div></div>
+      <div id="toast" role="status" hidden></div>
+    </main>
+  </div>
+  <script src="renderer.js"></script>
+</body>
+</html>
